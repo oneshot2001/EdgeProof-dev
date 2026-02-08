@@ -1,0 +1,14 @@
+version: "3.8"
+
+services:
+  worker:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - WORKER_API_KEY=dev-worker-api-key
+      - ALLOWED_ORIGINS=http://localhost:3000
+      - LOG_LEVEL=debug
+    volumes:
+      - ./app:/app/app
+    restart: unless-stopped
