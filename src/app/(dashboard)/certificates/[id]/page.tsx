@@ -2,7 +2,7 @@ import Link from "next/link";
 import { ArrowLeft, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CertificatePreview } from "@/components/certificate/CertificatePreview";
-import { MOCK_VERIFICATIONS } from "@/lib/mock/data";
+import { createClient } from "@/lib/supabase/server";
 import { buildCertificateData } from "@/lib/pdf/certificate";
 
 interface CertificatePageProps {
@@ -11,7 +11,14 @@ interface CertificatePageProps {
 
 export default async function CertificatePage({ params }: CertificatePageProps) {
   const { id } = await params;
-  const verification = MOCK_VERIFICATIONS.find((v) => v.id === id);
+
+  const supabase = await createClient();
+
+  const { data: verification } = await supabase
+    .from("verifications")
+    .select("*")
+    .eq("id", id)
+    .single();
 
   if (!verification) {
     return (

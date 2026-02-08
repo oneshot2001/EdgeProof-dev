@@ -9,6 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
+import { createClient } from "@/lib/supabase/client";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -20,14 +21,35 @@ export default function LoginPage() {
     setLoading(true);
     setError(null);
 
-    // Dev mode: skip auth, go straight to dashboard
+    const formData = new FormData(e.currentTarget);
+    const email = formData.get("email") as string;
+    const password = formData.get("password") as string;
+
+    const supabase = createClient();
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+
+    if (error) {
+      setError(error.message);
+      setLoading(false);
+      return;
+    }
+
     router.push("/dashboard");
+    router.refresh();
   };
 
-  const handleOAuth = (provider: string) => {
-    // Dev mode: skip OAuth, go to dashboard
-    console.log(`OAuth ${provider} — would redirect to Supabase`);
-    router.push("/dashboard");
+  const handleOAuth = async (provider: "google" | "azure") => {
+    const supabase = createClient();
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider,
+      options: {
+        redirectTo: `${window.location.origin}/callback`,
+      },
+    });
+
+    if (error) {
+      setError(error.message);
+    }
   };
 
   return (
@@ -49,7 +71,6 @@ export default function LoginPage() {
                 name="email"
                 type="email"
                 placeholder="you@example.com"
-                defaultValue="demo@edgeproof.com"
                 required
               />
             </div>
@@ -60,7 +81,6 @@ export default function LoginPage() {
                 name="password"
                 type="password"
                 placeholder="Enter your password"
-                defaultValue="password"
                 required
               />
             </div>
@@ -89,7 +109,7 @@ export default function LoginPage() {
             <Button
               variant="outline"
               className="w-full"
-              onClick={() => handleOAuth("microsoft")}
+              onClick={() => handleOAuth("azure")}
             >
               Continue with Microsoft
             </Button>

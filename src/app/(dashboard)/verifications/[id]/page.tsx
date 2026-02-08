@@ -2,8 +2,7 @@ import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { VerificationResult } from "@/components/verification/VerificationResult";
-import { MOCK_VERIFICATIONS } from "@/lib/mock/data";
-import { MOCK_AUDIT_LOG } from "@/lib/mock/data";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 
 interface VerificationDetailPageProps {
   params: Promise<{ id: string }>;
@@ -13,7 +12,15 @@ export default async function VerificationDetailPage({
   params,
 }: VerificationDetailPageProps) {
   const { id } = await params;
-  const verification = MOCK_VERIFICATIONS.find((v) => v.id === id);
+
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+
+  const { data: verification } = await supabase
+    .from("verifications")
+    .select("*")
+    .eq("id", id)
+    .single();
 
   if (!verification) {
     return (
@@ -29,9 +36,32 @@ export default async function VerificationDetailPage({
     );
   }
 
-  const auditLog = MOCK_AUDIT_LOG.filter(
-    (entry) => entry.verification_id === id
-  );
+  // Fetch audit log
+  const serviceClient = await createServiceClient();
+  const { data: auditLog } = await serviceClient
+    .from("audit_log")
+    .select("*")
+    .eq("verification_id", id)
+    .order("created_at", { ascending: true });
+
+  // Insert 'viewed' audit log entry
+  if (user) {
+    await serviceClient.from("audit_log").insert({
+      verification_id: id,
+      user_id: user.id,
+      action: "viewed",
+      metadata: {},
+    });
+  }
+
+  // Check if user is enterprise tier
+  const { data: userProfile } = await supabase
+    .from("users")
+    .select("subscription_tier")
+    .eq("id", user!.id)
+    .single();
+
+  const isEnterprise = userProfile?.subscription_tier === "enterprise";
 
   const pollResponse = {
     id: verification.id,
@@ -75,8 +105,8 @@ export default async function VerificationDetailPage({
 
       <VerificationResult
         verification={pollResponse}
-        auditLog={auditLog}
-        isEnterprise={false}
+        auditLog={auditLog || []}
+        isEnterprise={isEnterprise}
       />
     </div>
   );

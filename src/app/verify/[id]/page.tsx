@@ -1,7 +1,7 @@
 import { Shield } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { VerdictBadge } from "@/components/verification/VerdictBadge";
-import { MOCK_VERIFICATIONS } from "@/lib/mock/data";
+import { createServiceClient } from "@/lib/supabase/server";
 
 interface PublicVerifyPageProps {
   params: Promise<{ id: string }>;
@@ -10,12 +10,31 @@ interface PublicVerifyPageProps {
 export default async function PublicVerifyPage({ params }: PublicVerifyPageProps) {
   const { id } = await params;
 
-  // Look up by public_token or id
-  const verification = MOCK_VERIFICATIONS.find(
-    (v) => v.public_token === id || v.id === id
-  );
+  const serviceClient = await createServiceClient();
 
-  if (!verification || !verification.is_public) {
+  // Look up by public_token first, then by id
+  let verification = null;
+
+  const { data: byToken } = await serviceClient
+    .from("verifications")
+    .select("*")
+    .eq("public_token", id)
+    .eq("is_public", true)
+    .single();
+
+  if (byToken) {
+    verification = byToken;
+  } else {
+    const { data: byId } = await serviceClient
+      .from("verifications")
+      .select("*")
+      .eq("id", id)
+      .eq("is_public", true)
+      .single();
+    verification = byId;
+  }
+
+  if (!verification) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-muted/30 px-4">
         <Card className="w-full max-w-md text-center">
@@ -89,7 +108,7 @@ export default async function PublicVerifyPage({ params }: PublicVerifyPageProps
               <span className="font-medium">
                 {verification.completed_at
                   ? new Date(verification.completed_at).toLocaleDateString()
-                  : "—"}
+                  : "\u2014"}
               </span>
             </div>
           </CardContent>

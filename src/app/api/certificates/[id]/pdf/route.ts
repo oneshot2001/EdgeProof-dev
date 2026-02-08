@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { MOCK_VERIFICATIONS } from "@/lib/mock/data";
+import { createClient } from "@/lib/supabase/server";
 
 export async function GET(
   request: NextRequest,
@@ -7,9 +7,20 @@ export async function GET(
 ) {
   const { id } = await params;
 
-  const verification = MOCK_VERIFICATIONS.find((v) => v.id === id);
+  const supabase = await createClient();
+  const { data: { user }, error: authError } = await supabase.auth.getUser();
 
-  if (!verification) {
+  if (authError || !user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const { data: verification, error: queryError } = await supabase
+    .from("verifications")
+    .select("*")
+    .eq("id", id)
+    .single();
+
+  if (queryError || !verification) {
     return NextResponse.json(
       { error: "Certificate not found" },
       { status: 404 }
@@ -17,8 +28,7 @@ export async function GET(
   }
 
   // In production, this would use @react-pdf/renderer to generate a real PDF.
-  // For dev mode, return a simple text-based placeholder.
-  // The actual PDF generation is in src/lib/pdf/certificate.ts
+  // For now, return a text-based placeholder.
   const pdfContent = `
 EDGEPROOF - CERTIFICATE OF VIDEO AUTHENTICITY
 ================================================

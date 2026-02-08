@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { MOCK_VERIFICATIONS } from "@/lib/mock/data";
+import { createServiceClient } from "@/lib/supabase/server";
 
 export async function GET(
   request: NextRequest,
@@ -7,12 +7,31 @@ export async function GET(
 ) {
   const { id } = await params;
 
-  // Look up by public_token
-  const verification = MOCK_VERIFICATIONS.find(
-    (v) => v.public_token === id || v.id === id
-  );
+  const serviceClient = await createServiceClient();
 
-  if (!verification || !verification.is_public) {
+  // Look up by public_token first, then by id
+  let verification = null;
+
+  const { data: byToken } = await serviceClient
+    .from("verifications")
+    .select("*")
+    .eq("public_token", id)
+    .eq("is_public", true)
+    .single();
+
+  if (byToken) {
+    verification = byToken;
+  } else {
+    const { data: byId } = await serviceClient
+      .from("verifications")
+      .select("*")
+      .eq("id", id)
+      .eq("is_public", true)
+      .single();
+    verification = byId;
+  }
+
+  if (!verification) {
     return NextResponse.json(
       { error: "Verification not found or not public" },
       { status: 404 }

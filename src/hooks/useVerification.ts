@@ -17,6 +17,13 @@ interface UseVerificationReturn {
   reset: () => void;
 }
 
+async function computeFileHash(file: File): Promise<string> {
+  const buffer = await file.arrayBuffer();
+  const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 export function useVerification(): UseVerificationReturn {
   const [phase, setPhase] = useState<VerificationPhase>("idle");
   const [stage, setStage] = useState<UploadStage>("uploading");
@@ -89,13 +96,31 @@ export function useVerification(): UseVerificationReturn {
           throw new Error(err.error || "Upload failed");
         }
 
-        const { verificationId, filePath } = await uploadRes.json();
+        const { uploadUrl, verificationId, filePath, token } = await uploadRes.json();
+        setProgress(20);
+
+        // Step 2: Upload file to presigned URL
+        const uploadToStorageRes = await fetch(uploadUrl, {
+          method: "PUT",
+          headers: {
+            "Content-Type": file.type || "video/mp4",
+            ...(token ? { "x-upsert": "true" } : {}),
+          },
+          body: file,
+        });
+
+        if (!uploadToStorageRes.ok) {
+          throw new Error("Failed to upload file to storage");
+        }
+
         setProgress(30);
         setStage("processing");
 
-        // Step 2: Initiate verification
-        // In production, we'd upload to presigned URL first, then verify
-        // For dev, skip actual upload and go straight to verification
+        // Step 3: Compute SHA-256 hash
+        const fileHash = await computeFileHash(file);
+        setProgress(40);
+
+        // Step 4: Initiate verification
         const verifyRes = await fetch("/api/verify", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -104,7 +129,7 @@ export function useVerification(): UseVerificationReturn {
             filePath,
             fileName: file.name,
             fileSizeBytes: file.size,
-            fileHash: "dev-mock-hash-" + Date.now(),
+            fileHash,
           }),
         });
 
@@ -116,7 +141,7 @@ export function useVerification(): UseVerificationReturn {
         setPhase("processing");
         setProgress(50);
 
-        // Step 3: Start polling
+        // Step 5: Start polling
         pollVerification(verificationId);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Unknown error");
