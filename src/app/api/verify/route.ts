@@ -170,8 +170,8 @@ async function markVerificationError(
     await serviceClient.from("audit_log").insert({
       verification_id: verificationId,
       user_id: userId,
-      action: "error",
-      metadata: { error: errorMessage },
+      action: "verified",
+      metadata: { error: errorMessage, status: "error" },
     });
   } catch (logErr) {
     console.error("Failed to log verification error:", logErr);
