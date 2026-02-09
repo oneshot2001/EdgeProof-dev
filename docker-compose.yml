@@ -9,4 +9,5 @@ services:
       - WORKER_API_KEY=dev-worker-api-key
       - ALLOWED_ORIGINS=http://localhost:3000
       - LOG_LEVEL=debug
+      - USE_MOCK_RESULTS=false
     restart: unless-stopped

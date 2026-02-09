@@ -23,6 +23,8 @@
 # misc
 .DS_Store
 *.pem
+# Allow Axis public PKI certificates (not secrets)
+!worker/certs/*.pem
 
 # debug
 npm-debug.log*

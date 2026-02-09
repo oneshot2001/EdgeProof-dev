@@ -5,7 +5,15 @@ import uuid
 import time
 
 from app.config import settings
-from app.models.verification import VerificationResult, mock_authentic_result, mock_tampered_result, mock_unsigned_result
+from app.models.verification import (
+    VerificationResult,
+    mock_authentic_result,
+    mock_tampered_result,
+    mock_unsigned_result,
+)
+from app.services.svf_runner import run_svf_validator
+from app.services.video_info import get_video_info
+from app.services.result_mapper import map_to_result
 
 app = FastAPI(title="EdgeProof Verification Worker", version="1.0.0")
 
@@ -26,6 +34,7 @@ async def health():
 async def verify_video(
     file: UploadFile = File(...),
     callback_url: str | None = Form(None),
+    verification_id: str | None = Form(None),
     authorization: str = Header(...),
 ):
     """
@@ -34,17 +43,11 @@ async def verify_video(
     Accepts a video file via multipart/form-data and returns a JSON
     verification result. Optionally posts the result to a callback URL.
 
-    In production, this runs the full verification pipeline:
-    1. Parse video container (MP4/MKV) to extract NALUs
-    2. Identify SEI NALUs with signing UUID
-    3. Extract signatures, metadata, attestation reports
-    4. Recompute frame hashes and GOP hashes
-    5. Validate signatures against embedded device certificate
-    6. Verify certificate chain to Axis Root CA
-    7. Validate attestation report
-    8. Check GOP chain continuity
-
-    For development, returns mock data based on the filename.
+    When USE_MOCK_RESULTS=true, returns mock data based on the filename.
+    Otherwise, runs the full verification pipeline:
+    1. Extract video metadata via ffprobe
+    2. Run SVF validator binary for cryptographic verification
+    3. Map results to the VerificationResult model
     """
     # Validate API key
     token = authorization.replace("Bearer ", "")
@@ -71,10 +74,18 @@ async def verify_video(
         with open(temp_path, "wb") as f:
             f.write(content)
 
-        # In production: run_verification_pipeline(temp_path)
-        # For dev: return mock data based on filename
-        result = get_mock_result(filename)
+        if settings.use_mock_results:
+            result = get_mock_result(filename)
+        else:
+            result = await run_verification_pipeline(temp_path, filename)
+
         result.processing_time_ms = int((time.time() - start_time) * 1000)
+
+        # Set verification_id if provided by the caller
+        if verification_id:
+            result.verification_id = verification_id
+
+        result_dict = result.model_dump(by_alias=True)
 
         # If callback_url provided, POST result there (async mode)
         if callback_url:
@@ -84,17 +95,29 @@ async def verify_video(
                 try:
                     await client.post(
                         callback_url,
-                        json=result.model_dump(),
+                        json=result_dict,
                         headers={"Authorization": f"Bearer {settings.worker_api_key}"},
                         timeout=10.0,
                     )
                 except Exception as e:
                     print(f"Callback failed: {e}")
 
-        return result.model_dump()
+        return result_dict
     finally:
         if os.path.exists(temp_path):
             os.unlink(temp_path)
+
+
+async def run_verification_pipeline(file_path: str, filename: str) -> VerificationResult:
+    """Run the full verification pipeline: ffprobe + SVF validator + result mapping."""
+    # 1. Get video metadata via ffprobe
+    video_info = await get_video_info(file_path)
+
+    # 2. Run SVF validator binary
+    svf_result = await run_svf_validator(file_path)
+
+    # 3. Map to VerificationResult
+    return map_to_result(svf_result, video_info)
 
 
 def get_mock_result(filename: str) -> VerificationResult:

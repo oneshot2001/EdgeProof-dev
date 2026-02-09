@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from enum import Enum
 from typing import Optional
 import uuid
@@ -47,13 +47,11 @@ class Integrity(BaseModel):
 
 
 class GapDetail(BaseModel):
-    from_time: str = ""
-    to_time: str = ""
+    from_time: str = Field(default="", alias="from")
+    to_time: str = Field(default="", alias="to")
     gap_seconds: float = 0.0
 
-    class Config:
-        # Rename from_time to "from" in JSON serialization
-        populate_by_name = True
+    model_config = {"populate_by_name": True}
 
 
 class Temporal(BaseModel):

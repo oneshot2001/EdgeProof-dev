@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { generateMockResult } from "@/lib/verification/dev-mock";
 
 const verifySchema = z.object({
   verificationId: z.string().uuid(),
@@ -75,7 +76,7 @@ export async function POST(request: NextRequest) {
       metadata: { file_name: fileName, file_size_bytes: fileSizeBytes },
     });
 
-    // Dispatch to worker if configured
+    // Dispatch to worker if configured, otherwise use dev mock fallback
     const workerUrl = process.env.VERIFICATION_WORKER_URL;
     const workerApiKey = process.env.VERIFICATION_WORKER_API_KEY;
 
@@ -85,26 +86,56 @@ export async function POST(request: NextRequest) {
         .from("videos")
         .download(filePath);
 
-      if (!downloadError && fileData) {
-        const callbackUrl = `${process.env.NEXT_PUBLIC_APP_URL}/api/webhooks/worker`;
-        const formData = new FormData();
-        formData.append("file", fileData, fileName);
-        formData.append("callback_url", callbackUrl);
-        formData.append("verification_id", verificationId);
-
-        // Fire-and-forget: send to worker
-        fetch(`${workerUrl}/verify`, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${workerApiKey}`,
-          },
-          body: formData,
-        }).catch((err) => {
-          console.error("Failed to dispatch to worker:", err);
-        });
-      } else {
+      if (downloadError || !fileData) {
         console.error("Failed to download file for worker:", downloadError);
+        await markVerificationError(serviceClient, verificationId, user.id, "Failed to download video from storage");
+        return NextResponse.json({
+          verificationId,
+          status: "processing",
+        });
       }
+
+      const callbackUrl = `${process.env.NEXT_PUBLIC_APP_URL}/api/webhooks/worker`;
+      const formData = new FormData();
+      formData.append("file", fileData, fileName);
+      formData.append("callback_url", callbackUrl);
+      formData.append("verification_id", verificationId);
+
+      // Dispatch to worker with timeout and error recovery
+      fetch(`${workerUrl}/verify`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${workerApiKey}`,
+        },
+        body: formData,
+        signal: AbortSignal.timeout(30_000),
+      }).catch(async (err) => {
+        console.error("Failed to dispatch to worker:", err);
+        await markVerificationError(serviceClient, verificationId, user.id, `Worker dispatch failed: ${err.message}`);
+      });
+    } else {
+      // Dev fallback: simulate worker callback with mock data
+      console.log("[dev-mock] No VERIFICATION_WORKER_URL set — using mock results");
+      const mockResult = generateMockResult(verificationId, fileName);
+
+      const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+      const callbackUrl = `${appUrl}/api/webhooks/worker`;
+
+      // Simulate async worker delay then POST mock result to webhook
+      setTimeout(async () => {
+        try {
+          await fetch(callbackUrl, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: workerApiKey ? `Bearer ${workerApiKey}` : "",
+            },
+            body: JSON.stringify(mockResult),
+          });
+        } catch (err) {
+          console.error("[dev-mock] Failed to deliver mock callback:", err);
+        }
+      }, 2000);
     }
 
     return NextResponse.json({
@@ -117,5 +148,32 @@ export async function POST(request: NextRequest) {
       { error: "Internal server error" },
       { status: 500 }
     );
+  }
+}
+
+// Mark a verification as errored and log to audit_log
+async function markVerificationError(
+  serviceClient: Awaited<ReturnType<typeof createServiceClient>>,
+  verificationId: string,
+  userId: string,
+  errorMessage: string,
+) {
+  try {
+    await serviceClient
+      .from("verifications")
+      .update({
+        status: "error",
+        completed_at: new Date().toISOString(),
+      })
+      .eq("id", verificationId);
+
+    await serviceClient.from("audit_log").insert({
+      verification_id: verificationId,
+      user_id: userId,
+      action: "error",
+      metadata: { error: errorMessage },
+    });
+  } catch (logErr) {
+    console.error("Failed to log verification error:", logErr);
   }
 }

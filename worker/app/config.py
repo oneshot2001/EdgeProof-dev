@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     temp_dir: str = "/tmp/edgeproof"
     certs_dir: str = "/app/certs"
     max_file_size_bytes: int = 50 * 1024 * 1024 * 1024  # 50 GB
+    use_mock_results: bool = False
 
     class Config:
         env_prefix = ""
