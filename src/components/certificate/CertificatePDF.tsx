@@ -1,3 +1,4 @@
+/* eslint-disable jsx-a11y/alt-text -- @react-pdf/renderer Image component does not support alt prop */
 import {
   Document,
   Page,

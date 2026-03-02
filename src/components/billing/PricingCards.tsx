@@ -103,7 +103,7 @@ export function PricingCards({
       const data = await res.json();
 
       if (data.url) {
-        window.location.href = data.url;
+        window.location.assign(data.url);
       } else {
         toast.error(data.error || "Failed to start checkout");
         setLoading(null);
