@@ -91,9 +91,19 @@ docker-compose up    # Worker on localhost:8000 (optional — mock system works 
 supabase start       # Local Supabase stack
 supabase db push     # Apply migrations from supabase/migrations/
 supabase gen types typescript --local > src/types/database.ts  # Regenerate DB types after schema changes
+
+npm test             # Vitest unit tests (172 tests across 9 files)
+npm run test:watch   # Vitest in watch mode
+npm run test:coverage # Vitest with V8 coverage
+npm run e2e          # Playwright E2E tests (requires dev server)
+npm run e2e:ui       # Playwright with interactive UI
 ```
 
-Note: `npm test` and `npm run e2e` scripts are not yet configured in package.json. Test infrastructure is planned but not set up.
+### Test Structure
+
+- **Unit tests (Vitest):** `src/**/__tests__/*.test.ts` — constants, dev-mock, mock-data, worker-client, PDF certificate builder, Stripe client/products/webhooks, API validation schemas
+- **E2E tests (Playwright):** `e2e/*.spec.ts` — auth flows, verification flows, certificate flows. Config in `playwright.config.ts`.
+- **Worker tests (Python):** `worker/tests/` — callback handling, response structure, format validation
 
 ## Environment Variables
 
@@ -117,13 +127,14 @@ See `edgeproof/.env.example` for the full list. Key groups:
 
 ## Database Schema
 
-Six migrations in `edgeproof/supabase/migrations/`:
+Seven migrations in `edgeproof/supabase/migrations/`:
 1. `users` — extends `auth.users` with profile, subscription tier, monthly verification counter (auto-resets via trigger)
 2. `teams` — Enterprise team management with white-label config (JSONB)
 3. `verifications` — core business object: file metadata, device info, cert chain, integrity counts, temporal data, worker response (JSONB), public token
 4. `audit_log` — chain of custody tracking (uploaded/verified/viewed/downloaded actions)
 5. `api_keys` — Enterprise API keys (hashed, prefixed, with permissions JSONB)
 6. `rls_policies` — RLS on all tables: users see own data + team members, verifications scoped to user/team
+7. `add_stripe_subscription_id` — adds `stripe_subscription_id` column + index to `users` table
 
 Key enums: `user_role`, `subscription_tier`, `verification_status`, `audit_action`.
 
@@ -158,7 +169,60 @@ Tiers affect file size limits, verification quotas, certificate branding, and fe
 
 ## Certificate PDF
 
-Core deliverable — must look authoritative for court use. Generated server-side with `@react-pdf/renderer`. Includes SHA-256 self-hash; QR code links to public verification page at `/verify/{public_token}`.
+Core deliverable — must look authoritative for court use. Generated server-side with `@react-pdf/renderer` in `src/components/certificate/CertificatePDF.tsx`. Generation logic in `src/lib/pdf/certificate.ts` (`generateCertificatePdf()`, `computePdfHash()`, `buildCertificateData()`).
+
+PDF sections: Header with QR code, Verdict badge, Device Origin, Integrity Analysis (with progress bar), Temporal Analysis, Chain of Custody (Enterprise), Methodology & Legal Footer with self-hash.
+
+API: `GET /api/certificates/[id]/pdf` generates and returns the PDF. Stores certificate hash in DB and logs `downloaded_pdf` audit event.
+
+In-browser preview: `src/components/certificate/CertificatePreview.tsx` mirrors the PDF layout.
+
+Note: `@react-pdf/renderer` `Image` component does not support `alt` prop — file-level eslint-disable for `jsx-a11y/alt-text` is set in `CertificatePDF.tsx`.
+
+## Stripe Billing Integration
+
+Fully wired Stripe integration with checkout, portal, and webhook handling.
+
+### Billing API Routes
+- `POST /api/billing/checkout` — creates Stripe Checkout session (Zod-validated)
+- `GET /api/billing/subscription` — returns full billing state (tier, limits, usage, reset date, subscription details)
+- `POST /api/billing/portal` — creates Stripe Customer Portal session for self-service management
+
+### Webhook Handlers (`src/lib/stripe/webhooks.ts`)
+- `checkout.session.completed` — stores subscription ID, resets monthly counter
+- `customer.subscription.updated` — detects cancel-at-period-end (no premature downgrade), resets counter on tier change
+- `customer.subscription.deleted` — downgrades to free + resets counter
+- `invoice.payment_succeeded` — resets monthly verification counter on billing cycle renewal
+- `invoice.payment_failed` — auto-downgrades to free after 3 failed payment attempts
+
+### Quota Enforcement (`src/lib/stripe/quota.ts`)
+- `checkVerificationQuota(userId)` — server-side quota check (respects monthly reset)
+- `checkFileSizeLimit(userId, bytes)` — tier-aware file size validation
+
+### Billing UI
+- `src/app/(dashboard)/billing/page.tsx` — current plan display, usage meter, upgrade/downgrade flows, cancellation warning banner
+- `src/components/billing/PricingCards.tsx` — "Your Plan" badge on current tier, upgrade via Checkout, plan changes via Portal
+- `src/components/billing/UsageMeter.tsx` — "Resets in N days" countdown, color-coded progress bar (amber at 80%, red at limit)
+- Hooks: `useSubscription` and `useUsage` both have `refresh()` methods
+
+### Billing Types
+- `src/types/billing.ts` — `BillingSubscriptionResponse`, `SubscriptionDetails`, `BillingLimits`, `BillingUsage`
+
+## Landing Page
+
+Marketing/conversion page at `src/app/page.tsx`. Server component (no client JS). Dark mode forced for legal tech aesthetic. Emerald brand color.
+
+Sections: Sticky nav, Hero ("Is Your Video Evidence Defensible?"), Problem/Solution contrast, How It Works (3-step), Four Attorney Questions, Features Grid (6 cards), Social Proof (placeholder testimonials), Pricing (constants-driven from `TIER_LIMITS`), Final CTA.
+
+Custom CSS utilities in `globals.css`: `landing-grid-bg`, `hero-glow`, `step-connector`, `pricing-highlight`.
+
+## Public Verification Page
+
+Server component at `src/app/verify/[id]/page.tsx` — QR code destination from Certificate PDFs. No auth required.
+
+Looks up verification by `public_token` (falls back to `id`) using `createServiceClient()` to bypass RLS. Dynamic OpenGraph metadata, `robots: noindex` for privacy.
+
+Three states: not found (error card), in progress (spinner), completed (full report). Reuses `VerdictBadge`, `DeviceInfo`, `IntegrityReport`, `TemporalReport` components. Includes file summary, verification metadata, "About This Verification" explainer, CTA to signup, and legal disclaimer.
 
 
 <claude-mem-context>
