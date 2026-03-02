@@ -63,15 +63,25 @@ export interface VerificationPollResponse {
   created_at: string;
 }
 
+export interface AuditEntry {
+  action: string;
+  timestamp: string;
+  userEmail: string | null;
+  ipAddress: string | null;
+  metadata: Record<string, unknown>;
+}
+
 export interface CertificateData {
   verificationId: string;
   status: VerificationStatus;
   fileName: string;
   fileHash: string;
+  fileSizeBytes: number | null;
   device: {
     serial: string | null;
     model: string | null;
     firmware: string | null;
+    hardwareId: string | null;
   };
   certificateChain: {
     valid: boolean | null;
@@ -85,6 +95,8 @@ export interface CertificateData {
     totalFrames: number | null;
     verifiedFrames: number | null;
     tamperedFrames: number | null;
+    chainIntact: boolean | null;
+    hashAlgorithm: string;
   };
   temporal: {
     recordingStart: string | null;
@@ -96,7 +108,9 @@ export interface CertificateData {
     valid: boolean | null;
     details: Record<string, unknown> | null;
   };
+  auditLog: AuditEntry[];
   publicToken: string | null;
   verifiedAt: string | null;
   issuedAt: string;
+  certificateHash: string | null;
 }
