@@ -9,6 +9,7 @@ export const MOCK_USER: User = {
   team_id: null,
   subscription_tier: "professional",
   stripe_customer_id: null,
+  stripe_subscription_id: null,
   monthly_verifications: 7,
   monthly_reset_at: "2026-03-01T00:00:00Z",
   created_at: "2026-01-05T10:00:00Z",

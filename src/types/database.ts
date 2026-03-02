@@ -27,6 +27,7 @@ export type User = {
   team_id: string | null;
   subscription_tier: SubscriptionTier;
   stripe_customer_id: string | null;
+  stripe_subscription_id: string | null;
   monthly_verifications: number;
   monthly_reset_at: string;
   created_at: string;
