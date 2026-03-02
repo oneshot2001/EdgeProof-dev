@@ -45,6 +45,24 @@
   --radius-2xl: calc(var(--radius) + 8px);
   --radius-3xl: calc(var(--radius) + 12px);
   --radius-4xl: calc(var(--radius) + 16px);
+  --color-emerald-500: oklch(0.696 0.17 162.48);
+  --color-emerald-400: oklch(0.765 0.177 163.223);
+  --color-emerald-600: oklch(0.596 0.145 163.225);
+  --color-emerald-900: oklch(0.307 0.086 166.4);
+  --color-emerald-950: oklch(0.234 0.065 165.8);
+  --color-red-500: oklch(0.637 0.237 25.331);
+  --color-red-400: oklch(0.704 0.191 22.216);
+  --color-red-900: oklch(0.358 0.128 29.234);
+  --color-red-950: oklch(0.258 0.092 26.042);
+  --color-amber-400: oklch(0.828 0.189 84.429);
+  --color-amber-500: oklch(0.769 0.188 70.08);
+  --color-slate-300: oklch(0.809 0.011 252.302);
+  --color-slate-400: oklch(0.704 0.015 252.723);
+  --color-slate-500: oklch(0.553 0.013 257.821);
+  --color-slate-800: oklch(0.279 0.012 256.848);
+  --color-slate-900: oklch(0.208 0.009 255.024);
+  --color-zinc-800: oklch(0.274 0.006 286.618);
+  --color-zinc-900: oklch(0.21 0.006 285.885);
 }
 
 :root {
@@ -123,4 +141,47 @@
   body {
     @apply bg-background text-foreground;
   }
+}
+
+/* Landing page grid background */
+.landing-grid-bg {
+  background-image:
+    linear-gradient(to right, oklch(1 0 0 / 4%) 1px, transparent 1px),
+    linear-gradient(to bottom, oklch(1 0 0 / 4%) 1px, transparent 1px);
+  background-size: 64px 64px;
+}
+
+/* Radial glow for hero */
+.hero-glow {
+  background: radial-gradient(
+    ellipse 80% 50% at 50% -20%,
+    oklch(0.696 0.17 162.48 / 15%),
+    transparent
+  );
+}
+
+/* Step connector line */
+.step-connector {
+  position: relative;
+}
+.step-connector::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: -2rem;
+  width: 4rem;
+  height: 2px;
+  background: linear-gradient(to right, oklch(0.696 0.17 162.48 / 40%), transparent);
+}
+@media (max-width: 767px) {
+  .step-connector::after {
+    display: none;
+  }
+}
+
+/* Subtle border glow for pricing highlight card */
+.pricing-highlight {
+  box-shadow:
+    0 0 0 1px oklch(0.696 0.17 162.48 / 40%),
+    0 0 40px -10px oklch(0.696 0.17 162.48 / 20%);
 }
