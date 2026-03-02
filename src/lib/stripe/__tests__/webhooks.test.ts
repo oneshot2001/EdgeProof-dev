@@ -16,7 +16,7 @@ const mockSelect = vi.fn().mockReturnValue({
 
 const mockInsert = vi.fn().mockResolvedValue({ data: null, error: null });
 
-const mockFrom = vi.fn().mockImplementation((table: string) => ({
+const mockFrom = vi.fn().mockImplementation(() => ({
   update: mockUpdate,
   select: mockSelect,
   insert: mockInsert,
@@ -181,10 +181,12 @@ describe("handleStripeWebhook", () => {
       await handleStripeWebhook(event);
 
       expect(consoleError).toHaveBeenCalledWith(
-        expect.stringContaining("Payment failed"),
+        "Payment failed for customer:",
         "cus_fail123",
         "invoice:",
-        "inv_fail123"
+        "inv_fail123",
+        "attempt:",
+        undefined,
       );
 
       consoleError.mockRestore();

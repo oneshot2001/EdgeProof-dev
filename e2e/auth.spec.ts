@@ -103,7 +103,7 @@ test.describe("Authentication", () => {
       // Public verification pages at /verify/[token] should be accessible
       // without authentication. The page may 404 if token is invalid, but
       // should NOT redirect to /login.
-      const response = await page.goto("/verify/pub_nonexistent");
+      await page.goto("/verify/pub_nonexistent");
 
       // Should NOT have been redirected to login
       expect(page.url()).not.toContain("/login");

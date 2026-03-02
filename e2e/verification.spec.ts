@@ -48,12 +48,7 @@ test.describe("Verification workflow", () => {
   test("should show file drop zone on the verify page", async ({ page }) => {
     await page.goto("/verify");
 
-    // The verify page should show a file dropzone or upload area
-    // This uses react-dropzone, so look for a dropzone container
-    const dropzone = page.locator(
-      '[data-testid="dropzone"], .dropzone, [role="presentation"]'
-    );
-    // If the page doesn't have specific test IDs, just verify the page loaded
+    // If the page doesn't have specific test IDs, just verify the page loaded.
     await expect(page.locator("body")).toBeVisible();
   });
 

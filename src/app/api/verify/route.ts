@@ -11,6 +11,13 @@ const verifySchema = z.object({
   fileHash: z.string().min(1),
 });
 
+async function hashBlob(blob: Blob): Promise<string> {
+  const buffer = await blob.arrayBuffer();
+  const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 export async function POST(request: NextRequest) {
   try {
     const supabase = await createClient();
@@ -34,7 +41,8 @@ export async function POST(request: NextRequest) {
 
     const serviceClient = await createServiceClient();
 
-    // Update verification to 'processing' and set file hash
+    // Set processing state with provisional client hash.
+    // When a worker is configured, this hash is verified against stored bytes before dispatch.
     const { error: updateError } = await serviceClient
       .from("verifications")
       .update({
@@ -89,30 +97,78 @@ export async function POST(request: NextRequest) {
       if (downloadError || !fileData) {
         console.error("Failed to download file for worker:", downloadError);
         await markVerificationError(serviceClient, verificationId, user.id, "Failed to download video from storage");
-        return NextResponse.json({
-          verificationId,
-          status: "processing",
-        });
+        return NextResponse.json(
+          { error: "Failed to fetch uploaded file for verification" },
+          { status: 500 },
+        );
       }
 
-      const callbackUrl = `${process.env.NEXT_PUBLIC_APP_URL}/api/webhooks/worker`;
+      // Compute server-side hash from stored bytes and reject mismatches.
+      const serverHash = await hashBlob(fileData);
+      if (serverHash !== fileHash) {
+        await markVerificationError(
+          serviceClient,
+          verificationId,
+          user.id,
+          "Uploaded file hash mismatch (client hash does not match stored file).",
+        );
+        return NextResponse.json(
+          { error: "File integrity check failed before verification." },
+          { status: 400 },
+        );
+      }
+
+      await serviceClient
+        .from("verifications")
+        .update({ file_hash_sha256: serverHash })
+        .eq("id", verificationId)
+        .eq("user_id", user.id);
+
+      const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+      const callbackUrl = `${appUrl}/api/webhooks/worker`;
       const formData = new FormData();
       formData.append("file", fileData, fileName);
       formData.append("callback_url", callbackUrl);
       formData.append("verification_id", verificationId);
 
-      // Dispatch to worker with timeout and error recovery
-      fetch(`${workerUrl}/verify`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${workerApiKey}`,
-        },
-        body: formData,
-        signal: AbortSignal.timeout(30_000),
-      }).catch(async (err) => {
+      // Dispatch to worker with timeout and explicit non-2xx handling.
+      try {
+        const workerResponse = await fetch(`${workerUrl}/verify`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${workerApiKey}`,
+          },
+          body: formData,
+          signal: AbortSignal.timeout(30_000),
+        });
+
+        if (!workerResponse.ok) {
+          const workerError = await workerResponse.text();
+          await markVerificationError(
+            serviceClient,
+            verificationId,
+            user.id,
+            `Worker dispatch failed (${workerResponse.status}): ${workerError || "Unknown worker error"}`,
+          );
+          return NextResponse.json(
+            { error: "Verification worker failed to accept the job." },
+            { status: 502 },
+          );
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
         console.error("Failed to dispatch to worker:", err);
-        await markVerificationError(serviceClient, verificationId, user.id, `Worker dispatch failed: ${err.message}`);
-      });
+        await markVerificationError(
+          serviceClient,
+          verificationId,
+          user.id,
+          `Worker dispatch failed: ${message}`,
+        );
+        return NextResponse.json(
+          { error: "Failed to dispatch verification to worker." },
+          { status: 502 },
+        );
+      }
     } else {
       // Dev fallback: simulate worker callback with mock data
       console.log("[dev-mock] No VERIFICATION_WORKER_URL set — using mock results");
@@ -165,7 +221,8 @@ async function markVerificationError(
         status: "error",
         completed_at: new Date().toISOString(),
       })
-      .eq("id", verificationId);
+      .eq("id", verificationId)
+      .eq("user_id", userId);
 
     await serviceClient.from("audit_log").insert({
       verification_id: verificationId,

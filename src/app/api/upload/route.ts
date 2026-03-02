@@ -31,7 +31,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { fileName, fileSizeBytes, contentType: _contentType } = parsed.data;
+    const { fileName, fileSizeBytes } = parsed.data;
 
     // Fetch user profile to check quota and tier limits
     const serviceClient = await createServiceClient();

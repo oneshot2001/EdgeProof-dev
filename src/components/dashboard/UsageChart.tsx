@@ -11,7 +11,8 @@ interface UsageChartProps {
 
 export function UsageChart({ used, limit, tierLabel }: UsageChartProps) {
   const isUnlimited = limit === Infinity;
-  const percent = isUnlimited ? 0 : (used / limit) * 100;
+  const percent = isUnlimited ? 0 : Math.min((used / limit) * 100, 100);
+  const remaining = isUnlimited ? Infinity : Math.max(0, limit - used);
 
   return (
     <Card>
@@ -32,7 +33,7 @@ export function UsageChart({ used, limit, tierLabel }: UsageChartProps) {
           <span className="text-muted-foreground">{tierLabel} Plan</span>
           {!isUnlimited && (
             <span className="text-muted-foreground">
-              {limit - used} remaining
+              {remaining} remaining
             </span>
           )}
         </div>

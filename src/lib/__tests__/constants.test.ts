@@ -10,8 +10,6 @@ import {
   VERIFICATION_STATUSES,
   TERMINAL_STATUSES,
   SIGNING_UUID,
-  type SubscriptionTier,
-  type VerificationStatus,
 } from "@/lib/constants";
 
 describe("APP constants", () => {

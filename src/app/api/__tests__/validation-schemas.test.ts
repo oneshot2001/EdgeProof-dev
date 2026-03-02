@@ -329,7 +329,8 @@ describe("workerCallbackSchema", () => {
   });
 
   it("should reject when required nested object is missing", () => {
-    const { device, ...withoutDevice } = validCallback;
+    const withoutDevice = { ...validCallback };
+    delete (withoutDevice as { device?: unknown }).device;
     const result = workerCallbackSchema.safeParse(withoutDevice);
     expect(result.success).toBe(false);
   });

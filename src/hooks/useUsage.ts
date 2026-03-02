@@ -43,7 +43,10 @@ export function useUsage(tier: SubscriptionTier = "free"): UseUsageReturn {
   }, []);
 
   useEffect(() => {
-    fetchUsage();
+    const load = async () => {
+      await fetchUsage();
+    };
+    void load();
   }, [fetchUsage]);
 
   const monthlyLimit = TIER_LIMITS[tier].verificationsPerMonth;

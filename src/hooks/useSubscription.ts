@@ -44,7 +44,10 @@ export function useSubscription(): UseSubscriptionReturn {
   }, []);
 
   useEffect(() => {
-    fetchTier();
+    const load = async () => {
+      await fetchTier();
+    };
+    void load();
   }, [fetchTier]);
 
   return {

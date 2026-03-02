@@ -109,11 +109,13 @@ export async function GET(
   try {
     const { buffer, hash } = await generateCertificatePdf(certData, appUrl);
 
-    // Store the certificate hash in the database for future reference
-    await supabase
-      .from("verifications")
-      .update({ certificate_hash: hash })
-      .eq("id", id);
+    // Persist hash once. PDF content is deterministic and re-downloads should not rotate it.
+    if (!verification.certificate_hash) {
+      await supabase
+        .from("verifications")
+        .update({ certificate_hash: hash })
+        .eq("id", id);
+    }
 
     // Log the PDF download in the audit trail
     try {

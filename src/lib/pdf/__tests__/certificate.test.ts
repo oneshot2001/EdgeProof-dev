@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { buildCertificateData } from "@/lib/pdf/certificate";
 import type { CertificateData } from "@/types/api";
 
@@ -14,10 +14,12 @@ describe("buildCertificateData", () => {
     id: "ver-001",
     status: "authentic",
     file_name: "camera-footage.mp4",
+    file_size_bytes: 1048576,
     file_hash_sha256: "abc123def456",
     device_serial: "ACCC8EAB1234",
     device_model: "AXIS P3265-LVE",
     device_firmware: "11.11.65",
+    device_hardware_id: "HW-001",
     cert_chain_valid: true,
     cert_intermediate: "Axis Device ID Intermediate CA RSA 1",
     cert_root: "Axis Device ID Root CA RSA",
@@ -33,8 +35,13 @@ describe("buildCertificateData", () => {
     gaps_detected: 0,
     attestation_valid: true,
     attestation_details: { key_origin: "hardware_secure_element" },
+    worker_response: {
+      integrity: { gop_chain_intact: true },
+    },
     public_token: "pub_abc123def456",
     completed_at: "2026-01-15T14:38:12Z",
+    created_at: "2026-01-15T14:20:00Z",
+    certificate_hash: null,
   };
 
   it("should map verification ID correctly", () => {
@@ -101,15 +108,9 @@ describe("buildCertificateData", () => {
     expect(result.verifiedAt).toBe("2026-01-15T14:38:12Z");
   });
 
-  it("should set issuedAt to current time (ISO string)", () => {
-    const before = new Date().toISOString();
+  it("should set issuedAt from completed_at when available", () => {
     const result = buildCertificateData(fullVerification);
-    const after = new Date().toISOString();
-
-    expect(result.issuedAt).toBeTruthy();
-    // The issuedAt should be between before and after
-    expect(result.issuedAt >= before).toBe(true);
-    expect(result.issuedAt <= after).toBe(true);
+    expect(result.issuedAt).toBe("2026-01-15T14:38:12Z");
   });
 
   describe("nullable fields", () => {
@@ -117,10 +118,12 @@ describe("buildCertificateData", () => {
       id: "ver-null",
       status: "unsigned",
       file_name: "unknown.mp4",
+      file_size_bytes: 2048,
       file_hash_sha256: "empty",
       device_serial: null,
       device_model: null,
       device_firmware: null,
+      device_hardware_id: null,
       cert_chain_valid: null,
       cert_intermediate: null,
       cert_root: null,
@@ -136,8 +139,11 @@ describe("buildCertificateData", () => {
       gaps_detected: 0,
       attestation_valid: null,
       attestation_details: null,
+      worker_response: null,
       public_token: null,
       completed_at: null,
+      created_at: "2026-01-10T00:00:00Z",
+      certificate_hash: null,
     };
 
     it("should handle null device info gracefully", () => {
@@ -182,6 +188,7 @@ describe("buildCertificateData", () => {
       const result = buildCertificateData(nullVerification);
       expect(result.publicToken).toBeNull();
       expect(result.verifiedAt).toBeNull();
+      expect(result.issuedAt).toBe("2026-01-10T00:00:00Z");
     });
   });
 

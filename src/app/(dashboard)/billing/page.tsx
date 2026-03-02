@@ -16,12 +16,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { PricingCards } from "@/components/billing/PricingCards";
 import { UsageMeter } from "@/components/billing/UsageMeter";
 import { type BillingSubscriptionResponse } from "@/types/billing";
-import { type SubscriptionTier } from "@/lib/constants";
 import {
   CreditCard,
   ExternalLink,
   AlertTriangle,
-  CheckCircle2,
   Calendar,
   Shield,
 } from "lucide-react";

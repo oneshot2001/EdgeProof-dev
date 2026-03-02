@@ -72,7 +72,7 @@ export default async function DashboardPage() {
         </div>
         <UsageChart
           used={monthlyUsed}
-          limit={limits.verificationsPerMonth === Infinity ? 0 : limits.verificationsPerMonth}
+          limit={limits.verificationsPerMonth}
           tierLabel={limits.label}
         />
       </div>

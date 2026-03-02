@@ -1,70 +1,61 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createServiceClient } from "@/lib/supabase/server";
+import {
+  readApiKeyFromAuthHeader,
+  validateApiKey,
+} from "@/lib/auth/api-keys";
 
 const apiVerifySchema = z.object({
   file_url: z.string().url().optional(),
   callback_url: z.string().url().optional(),
 });
 
-async function hashApiKey(key: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(key);
-  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+async function hashFile(file: File): Promise<string> {
+  const buffer = await file.arrayBuffer();
+  const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
   const hashArray = Array.from(new Uint8Array(hashBuffer));
   return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-async function validateApiKey(authHeader: string) {
-  if (!authHeader?.startsWith("Bearer ep_live_")) {
-    return null;
-  }
-
-  const apiKey = authHeader.replace("Bearer ", "");
-  const keyHash = await hashApiKey(apiKey);
-  const keyPrefix = apiKey.slice(0, 16);
-
+async function markVerificationError(
+  verificationId: string,
+  errorMessage: string,
+): Promise<void> {
   const serviceClient = await createServiceClient();
-  const { data: apiKeyRow } = await serviceClient
-    .from("api_keys")
-    .select("*")
-    .eq("key_hash", keyHash)
-    .eq("key_prefix", keyPrefix)
-    .eq("revoked", false)
-    .single();
-
-  if (!apiKeyRow) {
-    return null;
-  }
-
-  // Check expiry
-  if (apiKeyRow.expires_at && new Date(apiKeyRow.expires_at) < new Date()) {
-    return null;
-  }
-
-  // Update last_used_at
   await serviceClient
-    .from("api_keys")
-    .update({ last_used_at: new Date().toISOString() })
-    .eq("id", apiKeyRow.id);
-
-  return apiKeyRow;
+    .from("verifications")
+    .update({
+      status: "error",
+      completed_at: new Date().toISOString(),
+      worker_response: { error: errorMessage },
+    })
+    .eq("id", verificationId);
 }
 
 export async function POST(request: NextRequest) {
   const authHeader = request.headers.get("authorization");
-  if (!authHeader?.startsWith("Bearer ep_live_")) {
+  if (!readApiKeyFromAuthHeader(authHeader)) {
     return NextResponse.json(
       { error: "Invalid API key. Use a valid ep_live_ prefixed key." },
-      { status: 401 }
+      { status: 401 },
     );
   }
 
-  const apiKeyRow = await validateApiKey(authHeader);
+  const apiKeyRow = await validateApiKey(authHeader, { updateLastUsed: true });
   if (!apiKeyRow) {
     return NextResponse.json(
       { error: "Invalid or expired API key." },
-      { status: 401 }
+      { status: 401 },
+    );
+  }
+
+  const workerUrl = process.env.VERIFICATION_WORKER_URL;
+  const workerApiKey = process.env.VERIFICATION_WORKER_API_KEY;
+  if (!workerUrl || !workerApiKey) {
+    return NextResponse.json(
+      { error: "Verification worker is not configured." },
+      { status: 503 },
     );
   }
 
@@ -73,95 +64,102 @@ export async function POST(request: NextRequest) {
     const serviceClient = await createServiceClient();
     const verificationId = crypto.randomUUID();
 
-    if (contentType.includes("multipart/form-data")) {
-      const formData = await request.formData();
-      const file = formData.get("file");
-      if (!file) {
-        return NextResponse.json(
-          { error: "No file provided" },
-          { status: 400 }
-        );
-      }
-
-      const fileBlob = file as File;
-      const filePath = `uploads/${apiKeyRow.user_id}/${verificationId}/${fileBlob.name}`;
-
-      // Create verification row
-      await serviceClient.from("verifications").insert({
-        id: verificationId,
-        user_id: apiKeyRow.user_id,
-        team_id: apiKeyRow.team_id,
-        status: "processing",
-        file_name: fileBlob.name,
-        file_size_bytes: fileBlob.size,
-        file_hash_sha256: "",
-        file_storage_path: filePath,
-        started_at: new Date().toISOString(),
-      });
-
-      // Upload file to storage
-      await serviceClient.storage
-        .from("videos")
-        .upload(filePath, fileBlob);
-
-      // Dispatch to worker if configured
-      const workerUrl = process.env.VERIFICATION_WORKER_URL;
-      const workerApiKey = process.env.VERIFICATION_WORKER_API_KEY;
-
-      if (workerUrl && workerApiKey) {
-        const callbackUrl = `${process.env.NEXT_PUBLIC_APP_URL}/api/webhooks/worker`;
-        const workerFormData = new FormData();
-        workerFormData.append("file", fileBlob, fileBlob.name);
-        workerFormData.append("callback_url", callbackUrl);
-        workerFormData.append("verification_id", verificationId);
-
-        fetch(`${workerUrl}/verify`, {
-          method: "POST",
-          headers: { Authorization: `Bearer ${workerApiKey}` },
-          body: workerFormData,
-        }).catch((err) => console.error("Worker dispatch failed:", err));
-      }
-
-      return NextResponse.json({
-        verification_id: verificationId,
-        status: "processing",
-        poll_url: `/api/v1/verifications/${verificationId}`,
-      });
-    } else {
+    if (!contentType.includes("multipart/form-data")) {
       const body = await request.json();
       const parsed = apiVerifySchema.safeParse(body);
 
       if (!parsed.success) {
         return NextResponse.json(
           { error: "Invalid request", details: parsed.error.flatten() },
-          { status: 400 }
+          { status: 400 },
         );
       }
 
-      // Create verification row for URL-based verification
-      await serviceClient.from("verifications").insert({
-        id: verificationId,
-        user_id: apiKeyRow.user_id,
-        team_id: apiKeyRow.team_id,
-        status: "processing",
-        file_name: parsed.data.file_url || "api-upload",
-        file_size_bytes: 0,
-        file_hash_sha256: "",
-        file_storage_path: null,
-        started_at: new Date().toISOString(),
-      });
-
-      return NextResponse.json({
-        verification_id: verificationId,
-        status: "processing",
-        poll_url: `/api/v1/verifications/${verificationId}`,
-      });
+      return NextResponse.json(
+        {
+          error:
+            "URL-based verification is not currently supported. Upload a file as multipart/form-data using the `file` field.",
+        },
+        { status: 400 },
+      );
     }
+
+    const formData = await request.formData();
+    const file = formData.get("file");
+    if (!(file instanceof File)) {
+      return NextResponse.json({ error: "No file provided" }, { status: 400 });
+    }
+
+    const fileHash = await hashFile(file);
+    const filePath = `uploads/${apiKeyRow.user_id}/${verificationId}/${file.name}`;
+
+    const { error: insertError } = await serviceClient.from("verifications").insert({
+      id: verificationId,
+      user_id: apiKeyRow.user_id,
+      team_id: apiKeyRow.team_id,
+      status: "processing",
+      file_name: file.name,
+      file_size_bytes: file.size,
+      file_hash_sha256: fileHash,
+      file_storage_path: filePath,
+      started_at: new Date().toISOString(),
+    });
+
+    if (insertError) {
+      return NextResponse.json(
+        { error: "Failed to create verification record." },
+        { status: 500 },
+      );
+    }
+
+    const { error: uploadError } = await serviceClient.storage
+      .from("videos")
+      .upload(filePath, file);
+
+    if (uploadError) {
+      await markVerificationError(verificationId, "Failed to upload file to storage.");
+      return NextResponse.json(
+        { error: "Failed to upload file for verification." },
+        { status: 500 },
+      );
+    }
+
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+    const callbackUrl = `${appUrl}/api/webhooks/worker`;
+    const workerFormData = new FormData();
+    workerFormData.append("file", file, file.name);
+    workerFormData.append("callback_url", callbackUrl);
+    workerFormData.append("verification_id", verificationId);
+
+    const workerResponse = await fetch(`${workerUrl}/verify`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${workerApiKey}` },
+      body: workerFormData,
+      signal: AbortSignal.timeout(30_000),
+    });
+
+    if (!workerResponse.ok) {
+      const errorText = await workerResponse.text();
+      await markVerificationError(
+        verificationId,
+        `Worker dispatch failed (${workerResponse.status}): ${errorText || "Unknown worker error"}`,
+      );
+      return NextResponse.json(
+        { error: "Verification worker failed to accept the job." },
+        { status: 502 },
+      );
+    }
+
+    return NextResponse.json({
+      verification_id: verificationId,
+      status: "processing",
+      poll_url: `/api/v1/verifications/${verificationId}`,
+    });
   } catch (err) {
     console.error("V1 verify error:", err);
     return NextResponse.json(
       { error: "Internal server error" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }

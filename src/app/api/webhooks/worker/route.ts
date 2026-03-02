@@ -61,6 +61,14 @@ export async function POST(request: NextRequest) {
   // Verify worker API key
   const authHeader = request.headers.get("authorization");
   const expectedKey = process.env.VERIFICATION_WORKER_API_KEY;
+  const isLocalEnv = process.env.NODE_ENV !== "production";
+
+  if (!expectedKey && !isLocalEnv) {
+    return NextResponse.json(
+      { error: "Worker webhook is not configured." },
+      { status: 503 }
+    );
+  }
 
   if (expectedKey && authHeader !== `Bearer ${expectedKey}`) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });

@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
 import { STRIPE_PRICES, getPriceForTier } from "@/lib/stripe/products";
-import type { SubscriptionTier } from "@/lib/constants";
 
 describe("STRIPE_PRICES", () => {
   it("should define a pro price mapping", () => {

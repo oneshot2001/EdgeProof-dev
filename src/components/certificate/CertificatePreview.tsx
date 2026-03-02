@@ -14,7 +14,6 @@ import {
   Scale,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { type CertificateData } from "@/types/api";
 import { format } from "date-fns";
 import { formatDuration, formatFileSize } from "@/lib/pdf/certificate";

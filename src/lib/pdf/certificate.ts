@@ -33,6 +33,7 @@ function extractChainIntact(
     | Record<string, unknown>
     | undefined;
   if (!integrity) return null;
+  if (typeof integrity.gop_chain_intact === "boolean") return integrity.gop_chain_intact;
   if (typeof integrity.chain_intact === "boolean") return integrity.chain_intact;
   return null;
 }
@@ -70,6 +71,7 @@ export function buildCertificateData(
     worker_response: Record<string, unknown> | null;
     public_token: string | null;
     completed_at: string | null;
+    created_at: string;
     certificate_hash: string | null;
   },
   auditEntries: AuditEntry[] = []
@@ -114,7 +116,7 @@ export function buildCertificateData(
     auditLog: auditEntries,
     publicToken: verification.public_token,
     verifiedAt: verification.completed_at,
-    issuedAt: new Date().toISOString(),
+    issuedAt: verification.completed_at || verification.created_at,
     certificateHash: verification.certificate_hash,
   };
 }
@@ -175,8 +177,14 @@ export async function generateCertificatePdf(
 
   const qrCodeDataUrl = await generateQRCode(verifyUrl);
 
+  // Self-hash must be computed from a PDF that does not embed the hash itself.
+  const pdfData: CertificateData = {
+    ...data,
+    certificateHash: null,
+  };
+
   const element = React.createElement(CertificatePDF, {
-    data,
+    data: pdfData,
     qrCodeDataUrl,
   });
 

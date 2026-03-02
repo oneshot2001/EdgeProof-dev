@@ -1,13 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
-
-async function hashApiKey(key: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(key);
-  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
-}
+import {
+  readApiKeyFromAuthHeader,
+  validateApiKey,
+} from "@/lib/auth/api-keys";
 
 export async function GET(
   request: NextRequest,
@@ -17,30 +13,20 @@ export async function GET(
 
   // Validate API key
   const authHeader = request.headers.get("authorization");
-  if (!authHeader?.startsWith("Bearer ep_live_")) {
+  if (!readApiKeyFromAuthHeader(authHeader)) {
     return NextResponse.json(
       { error: "Invalid API key" },
       { status: 401 }
     );
   }
 
-  const apiKey = authHeader.replace("Bearer ", "");
-  const keyHash = await hashApiKey(apiKey);
-  const keyPrefix = apiKey.slice(0, 16);
-
-  const serviceClient = await createServiceClient();
-
-  const { data: apiKeyRow } = await serviceClient
-    .from("api_keys")
-    .select("user_id")
-    .eq("key_hash", keyHash)
-    .eq("key_prefix", keyPrefix)
-    .eq("revoked", false)
-    .single();
+  const apiKeyRow = await validateApiKey(authHeader);
 
   if (!apiKeyRow) {
     return NextResponse.json({ error: "Invalid API key" }, { status: 401 });
   }
+
+  const serviceClient = await createServiceClient();
 
   // Fetch verification (scoped to the API key's user)
   const { data: verification, error } = await serviceClient

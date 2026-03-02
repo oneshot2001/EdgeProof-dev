@@ -69,7 +69,7 @@ export function TemporalReport({
           <div>
             <p className="text-muted-foreground">Duration</p>
             <p className="font-medium">
-              {durationSeconds ? formatDuration(durationSeconds) : "N/A"}
+              {durationSeconds !== null ? formatDuration(durationSeconds) : "N/A"}
             </p>
           </div>
           <div>

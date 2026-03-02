@@ -20,7 +20,7 @@ export function UsageMeter({
   resetAt,
   isUnlimited = false,
 }: UsageMeterProps) {
-  const unlimited = isUnlimited || limit === Infinity || limit === 0;
+  const unlimited = isUnlimited || limit === Infinity;
   const percent = unlimited ? 0 : Math.min((used / limit) * 100, 100);
   const isWarning = !unlimited && percent > 80;
   const isAtLimit = !unlimited && used >= limit;

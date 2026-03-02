@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
+import {
+  API_KEY_LOOKUP_PREFIX_LENGTH,
+  hashApiKey,
+} from "@/lib/auth/api-keys";
 
 const createKeySchema = z.object({
   name: z.string().min(1).max(100),
@@ -75,18 +79,12 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // Generate API key: ep_live_ + 32 random hex chars
+  // Generate API key: ep_live_ + 32 random bytes (hex-encoded)
   const randomBytes = new Uint8Array(32);
   crypto.getRandomValues(randomBytes);
   const rawKey = `ep_live_${Array.from(randomBytes).map((b) => b.toString(16).padStart(2, "0")).join("")}`;
-  const prefix = rawKey.slice(0, 12); // "ep_live_XXXX"
-
-  // SHA-256 hash the key for storage
-  const encoder = new TextEncoder();
-  const hashBuffer = await crypto.subtle.digest("SHA-256", encoder.encode(rawKey));
-  const keyHash = Array.from(new Uint8Array(hashBuffer))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+  const prefix = rawKey.slice(0, API_KEY_LOOKUP_PREFIX_LENGTH);
+  const keyHash = await hashApiKey(rawKey);
 
   const { error: insertError } = await supabase
     .from("api_keys")
