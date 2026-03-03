@@ -92,7 +92,7 @@ supabase start       # Local Supabase stack
 supabase db push     # Apply migrations from supabase/migrations/
 supabase gen types typescript --local > src/types/database.ts  # Regenerate DB types after schema changes
 
-npm test             # Vitest unit tests (172 tests across 9 files)
+npm test             # Vitest unit tests
 npm run test:watch   # Vitest in watch mode
 npm run test:coverage # Vitest with V8 coverage
 npm run e2e          # Playwright E2E tests (requires dev server)
@@ -102,6 +102,7 @@ npm run e2e:ui       # Playwright with interactive UI
 ### Test Structure
 
 - **Unit tests (Vitest):** `src/**/__tests__/*.test.ts` — constants, dev-mock, mock-data, worker-client, PDF certificate builder, Stripe client/products/webhooks, API validation schemas
+- **API route tests (Vitest):** `src/app/api/__tests__/` — route handler unit tests
 - **E2E tests (Playwright):** `e2e/*.spec.ts` — auth flows, verification flows, certificate flows. Config in `playwright.config.ts`.
 - **Worker tests (Python):** `worker/tests/` — callback handling, response structure, format validation
 
@@ -119,11 +120,13 @@ See `edgeproof/.env.example` for the full list. Key groups:
 - Prefer server components; use `"use client"` only when needed (hooks, event handlers, browser APIs)
 - Validate all API inputs with Zod schemas at the top of route handlers
 - Use Supabase generated types from `src/types/database.ts` — don't manually define DB types
-- API keys: SHA-256 hash stored in DB, only `ep_live_` prefix displayed to users
+- API keys: SHA-256 hash stored in DB, only `ep_live_` prefix displayed to users. Validation helpers in `src/lib/auth/api-keys.ts`: `readApiKeyFromAuthHeader()` → `validateApiKey()`. Both the hash and first-16-char prefix are stored for efficient lookup.
 - Path alias: `@/` maps to `src/`
 - Tailwind v4 with `@theme inline` in `globals.css` (no tailwind.config.ts) and OKLCh color system
 - shadcn/ui components in `src/components/ui/`, added via `npx shadcn@latest add <component>`
 - Toast notifications via `sonner` (not shadcn toast)
+- Audit trail writes go through `src/lib/audit/actions.ts`
+- `src/lib/mock/` provides shared test data (`data.ts`) and a test logger (`logger.ts`) used across unit tests
 
 ## Database Schema
 
@@ -149,6 +152,15 @@ Auto-creates user profile on Supabase Auth signup via `handle_new_user()` trigge
 Returns JSON with: `status` (authentic/tampered/unsigned/inconclusive/error), `device`, `certificate_chain`, `attestation`, `integrity` (GOP/frame counts, chain intact boolean), `temporal` (timestamps, gaps), `video_metadata`, `errors[]`.
 
 Full contract with example response in `EDGEPROOF_BUILD_PLAN.md` § Step 2.2.
+
+## V1 Enterprise API
+
+Public REST API for Enterprise-tier customers. All endpoints require `Authorization: Bearer ep_live_<key>` header. Auth validated via `src/lib/auth/api-keys.ts`.
+
+- **`POST /api/v1/verify`** — multipart/form-data with `file` field. Creates a verification record, uploads file to Supabase Storage, dispatches to worker. Returns `{ verification_id, status: "processing", poll_url }`. Requires `VERIFICATION_WORKER_URL` (not available in mock mode).
+- **`GET /api/v1/verifications/{id}`** — poll a specific verification. Returns full `VerificationPollResponse` (see `src/types/api.ts`).
+
+The V1 API does NOT use the session-based flow — it inserts directly into `verifications` with `user_id` from the API key row, bypassing quota enforcement (MVP; quota to be wired in later).
 
 ## Signed Video Technical Context
 
