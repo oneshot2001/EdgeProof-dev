@@ -5,10 +5,15 @@ Extracts codec, container, resolution, framerate, duration, frame count,
 and checks for the Axis signed video SEI NALU UUID.
 """
 
-import asyncio
 import json
+import os
 import re
+import shutil
+import tempfile
 from typing import Optional
+
+from app.config import settings
+from app.sandbox import run_sandboxed
 
 
 # Axis signed video UUID (hex representation for searching in binary/hex output)
@@ -44,9 +49,13 @@ async def get_video_info(file_path: str) -> dict:
 
     # Extract format/container info
     fmt = probe_data.get("format", {})
+    if not isinstance(fmt, dict):
+        fmt = {}
     format_name = fmt.get("format_name", "")
+    if not isinstance(format_name, str):
+        format_name = ""
     result["container"] = _normalize_container(format_name)
-    result["duration_seconds"] = float(fmt.get("duration", 0))
+    result["duration_seconds"] = _safe_float(fmt.get("duration", 0))
 
     # Extract creation time from format tags if available
     tags = fmt.get("tags", {})
@@ -56,13 +65,18 @@ async def get_video_info(file_path: str) -> dict:
 
     # Extract video stream info (first video stream)
     streams = probe_data.get("streams", [])
+    if not isinstance(streams, list):
+        streams = []
     video_stream = next(
-        (s for s in streams if s.get("codec_type") == "video"),
+        (s for s in streams if isinstance(s, dict) and s.get("codec_type") == "video"),
         None,
     )
 
     if video_stream:
-        result["codec"] = _normalize_codec(video_stream.get("codec_name", ""))
+        codec_name = video_stream.get("codec_name", "")
+        if not isinstance(codec_name, str):
+            codec_name = ""
+        result["codec"] = _normalize_codec(codec_name)
         width = video_stream.get("width", 0)
         height = video_stream.get("height", 0)
         if width and height:
@@ -75,7 +89,7 @@ async def get_video_info(file_path: str) -> dict:
         # Estimate total frames
         nb_frames = video_stream.get("nb_frames")
         if nb_frames and nb_frames != "N/A":
-            result["total_frames"] = int(nb_frames)
+            result["total_frames"] = _safe_int(nb_frames)
         elif result["duration_seconds"] > 0 and result["framerate"] > 0:
             result["total_frames"] = int(result["duration_seconds"] * result["framerate"])
 
@@ -97,27 +111,49 @@ async def get_video_info(file_path: str) -> dict:
 
 async def _run_ffprobe(file_path: str) -> Optional[dict]:
     """Run ffprobe and return parsed JSON output."""
+    scratch_dir = _make_scratch("ffprobe_info_")
     try:
-        process = await asyncio.create_subprocess_exec(
-            "ffprobe",
-            "-v", "quiet",
-            "-print_format", "json",
-            "-show_format",
-            "-show_streams",
-            file_path,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-
-        stdout, _ = await asyncio.wait_for(
-            process.communicate(),
+        sandbox_result = await run_sandboxed(
+            [
+                "ffprobe",
+                "-v",
+                "quiet",
+                "-protocol_whitelist",
+                "file",
+                "-analyzeduration",
+                "5M",
+                "-probesize",
+                "10M",
+                "-print_format",
+                "json",
+                "-show_format",
+                "-show_streams",
+                file_path,
+            ],
+            ro_paths=[file_path],
+            scratch_dir=scratch_dir,
             timeout=FFPROBE_TIMEOUT_SECONDS,
         )
 
-        return json.loads(stdout.decode("utf-8"))
-    except (asyncio.TimeoutError, json.JSONDecodeError, FileNotFoundError) as e:
+        if (
+            sandbox_result.returncode != 0
+            or sandbox_result.timed_out
+            or sandbox_result.rlimit_killed
+            or sandbox_result.output_overflow
+            or sandbox_result.sandbox_error == "output_limit_exceeded"
+        ):
+            print(f"ffprobe failed closed: {sandbox_result.sandbox_error or sandbox_result.returncode}")
+            return None
+
+        data = json.loads(sandbox_result.stdout.decode("utf-8", errors="replace"))
+        if not isinstance(data, dict):
+            return None
+        return data
+    except (json.JSONDecodeError, OSError, ValueError) as e:
         print(f"ffprobe failed: {e}")
         return None
+    finally:
+        shutil.rmtree(scratch_dir, ignore_errors=True)
 
 
 async def _check_for_signing_uuid(file_path: str) -> bool:
@@ -128,30 +164,51 @@ async def _check_for_signing_uuid(file_path: str) -> bool:
     Falls back to binary search of the file header.
     """
     try:
-        # Use ffprobe to show packets and look for SEI data
-        process = await asyncio.create_subprocess_exec(
-            "ffprobe",
-            "-v", "quiet",
-            "-show_packets",
-            "-select_streams", "v:0",
-            "-read_intervals", "%+5",  # Only read first 5 seconds
-            "-print_format", "json",
-            file_path,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
+        scratch_dir = _make_scratch("ffprobe_uuid_")
+        try:
+            # Use ffprobe to show packets and look for SEI data
+            sandbox_result = await run_sandboxed(
+                [
+                    "ffprobe",
+                    "-v",
+                    "quiet",
+                    "-protocol_whitelist",
+                    "file",
+                    "-analyzeduration",
+                    "5M",
+                    "-probesize",
+                    "10M",
+                    "-show_packets",
+                    "-select_streams",
+                    "v:0",
+                    "-read_intervals",
+                    "%+5",  # Only read first 5 seconds
+                    "-print_format",
+                    "json",
+                    file_path,
+                ],
+                ro_paths=[file_path],
+                scratch_dir=scratch_dir,
+                timeout=FFPROBE_TIMEOUT_SECONDS,
+            )
 
-        stdout, _ = await asyncio.wait_for(
-            process.communicate(),
-            timeout=FFPROBE_TIMEOUT_SECONDS,
-        )
+            if (
+                sandbox_result.returncode != 0
+                or sandbox_result.timed_out
+                or sandbox_result.rlimit_killed
+                or sandbox_result.output_overflow
+                or sandbox_result.sandbox_error == "output_limit_exceeded"
+            ):
+                return False
 
-        output = stdout.decode("utf-8", errors="replace")
-        # The signing UUID bytes in the SEI data
-        if "5369676e" in output or "Signed Video" in output:
-            return True
+            output = sandbox_result.stdout.decode("utf-8", errors="replace")
+            # The signing UUID bytes in the SEI data
+            if "5369676e" in output or "Signed Video" in output:
+                return True
+        finally:
+            shutil.rmtree(scratch_dir, ignore_errors=True)
 
-    except (asyncio.TimeoutError, FileNotFoundError):
+    except (OSError, ValueError):
         pass
 
     # Fallback: search the file's first 1MB for the UUID bytes
@@ -165,6 +222,26 @@ async def _check_for_signing_uuid(file_path: str) -> bool:
         pass
 
     return False
+
+
+def _make_scratch(prefix: str) -> str:
+    os.makedirs(settings.temp_dir, mode=0o700, exist_ok=True)
+    os.chmod(settings.temp_dir, 0o700)
+    return tempfile.mkdtemp(prefix=prefix, dir=settings.temp_dir)
+
+
+def _safe_float(value) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+
+
+def _safe_int(value) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return 0
 
 
 def _normalize_codec(codec_name: str) -> str:
@@ -198,5 +275,5 @@ def _parse_framerate(r_frame_rate: str) -> float:
                 return 0.0
             return round(int(num) / den_val, 2)
         return float(r_frame_rate)
-    except (ValueError, ZeroDivisionError):
+    except (TypeError, ValueError, ZeroDivisionError):
         return 0.0

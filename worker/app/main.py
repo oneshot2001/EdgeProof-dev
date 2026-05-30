@@ -1,10 +1,17 @@
 from fastapi import FastAPI, UploadFile, File, Form, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+import asyncio
 import os
 import uuid
 import time
 
 from app.config import settings
+from app.sandbox import (
+    SANDBOX_MODE_DEGRADED,
+    ensure_sandbox_probed,
+    get_sandbox_health,
+    probe_sandbox_capabilities,
+)
 from app.models.verification import (
     VerificationResult,
     mock_authentic_result,
@@ -16,6 +23,8 @@ from app.services.video_info import get_video_info
 from app.services.result_mapper import map_to_result
 
 app = FastAPI(title="EdgeProof Verification Worker", version="1.0.0")
+VERIFY_SEMAPHORE = asyncio.Semaphore(max(1, settings.sandbox_max_concurrent_jobs))
+UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024
 
 app.add_middleware(
     CORSMiddleware,
@@ -25,9 +34,15 @@ app.add_middleware(
 )
 
 
+@app.on_event("startup")
+async def startup_probe_sandbox():
+    await probe_sandbox_capabilities()
+
+
 @app.get("/health")
 async def health():
-    return {"status": "healthy", "version": "1.0.0"}
+    await ensure_sandbox_probed()
+    return {"status": "healthy", "version": "1.0.0", "sandbox": get_sandbox_health()}
 
 
 @app.post("/verify")
@@ -36,6 +51,7 @@ async def verify_video(
     callback_url: str | None = Form(None),
     verification_id: str | None = Form(None),
     authorization: str = Header(...),
+    content_length: int | None = Header(None),
 ):
     """
     Verify a signed video file.
@@ -54,6 +70,14 @@ async def verify_video(
     if token != settings.worker_api_key:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
+    sandbox_mode = await ensure_sandbox_probed()
+    if sandbox_mode == SANDBOX_MODE_DEGRADED and not settings.allow_degraded_sandbox:
+        raise HTTPException(status_code=503, detail="Sandbox is degraded")
+
+    max_upload_bytes = min(settings.max_file_size_bytes, settings.sandbox_max_input_bytes)
+    if content_length is not None and content_length > max_upload_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded file is too large")
+
     # Validate file type
     filename = file.filename or "unknown.mp4"
     ext = os.path.splitext(filename)[1].lower()
@@ -64,20 +88,20 @@ async def verify_video(
         )
 
     # Save temp file
-    os.makedirs(settings.temp_dir, exist_ok=True)
+    os.makedirs(settings.temp_dir, mode=0o700, exist_ok=True)
+    os.chmod(settings.temp_dir, 0o700)
     temp_path = os.path.join(settings.temp_dir, f"{uuid.uuid4()}{ext}")
 
     start_time = time.time()
 
     try:
-        content = await file.read()
-        with open(temp_path, "wb") as f:
-            f.write(content)
+        await _stream_upload_to_disk(file, temp_path, max_upload_bytes)
 
-        if settings.use_mock_results:
-            result = get_mock_result(filename)
-        else:
-            result = await run_verification_pipeline(temp_path, filename)
+        async with VERIFY_SEMAPHORE:
+            if settings.use_mock_results:
+                result = get_mock_result(filename)
+            else:
+                result = await run_verification_pipeline(temp_path, filename)
 
         result.processing_time_ms = int((time.time() - start_time) * 1000)
 
@@ -87,6 +111,7 @@ async def verify_video(
 
         result_dict = result.model_dump(by_alias=True)
 
+        # Threat-model flag: callback SSRF hardening is deferred to Increment 2.
         # If callback_url provided, POST result there (async mode)
         if callback_url:
             import httpx
@@ -108,13 +133,32 @@ async def verify_video(
             os.unlink(temp_path)
 
 
+async def _stream_upload_to_disk(file: UploadFile, temp_path: str, max_upload_bytes: int) -> None:
+    bytes_written = 0
+    try:
+        with open(temp_path, "xb") as f:
+            while True:
+                chunk = await file.read(UPLOAD_CHUNK_BYTES)
+                if not chunk:
+                    break
+                bytes_written += len(chunk)
+                if bytes_written > max_upload_bytes:
+                    raise HTTPException(status_code=400, detail="Uploaded file is too large")
+                f.write(chunk)
+    except Exception:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+        raise
+
+
 async def run_verification_pipeline(file_path: str, filename: str) -> VerificationResult:
     """Run the full verification pipeline: ffprobe + SVF validator + result mapping."""
     # 1. Get video metadata via ffprobe
     video_info = await get_video_info(file_path)
 
-    # 2. Run SVF validator binary
-    svf_result = await run_svf_validator(file_path)
+    # 2. Run SVF validator binary with correct codec flag
+    codec = video_info.get("codec", "H.264")
+    svf_result = await run_svf_validator(file_path, codec=codec)
 
     # 3. Map to VerificationResult
     return map_to_result(svf_result, video_info)
