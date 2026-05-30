@@ -1,11 +1,17 @@
-# Production builds must pass reviewed full commit SHAs for SVF_SHA and
-# SVF_EXAMPLES_SHA. Use ALLOW_UNPINNED_SVF=true only for local refresh builds.
+# SVF sources are PINNED to reviewed, immutable commit SHAs. To bump: update
+# both SHAs together and re-review. ALLOW_UNPINNED_SVF=true is for local
+# refresh builds only (the guard below refuses "master" otherwise).
+#   SVF_SHA          -> AxisCommunications/signed-video-framework
+#                       1ae9fed = tag v2.3.5 (latest release; == master HEAD 2026-05-30)
+#   SVF_EXAMPLES_SHA -> AxisCommunications/signed-video-framework-examples
+#                       e009c31 = master HEAD 2026-05-30 (repo has no tags; links the
+#                       system-installed lib above, so it tracks v2.3.5)
 FROM python:3.12-slim-bookworm AS svf-builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-ARG SVF_SHA=master
-ARG SVF_EXAMPLES_SHA=master
+ARG SVF_SHA=1ae9fedfe6e7a7b6db65d05cc13f6098b1f92eba
+ARG SVF_EXAMPLES_SHA=e009c310fef10a997ffad6d21720154fbb155a38
 ARG ALLOW_UNPINNED_SVF=false
 
 RUN if [ "$ALLOW_UNPINNED_SVF" != "true" ] \
