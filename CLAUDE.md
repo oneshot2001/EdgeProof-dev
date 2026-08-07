@@ -99,6 +99,24 @@ npm run e2e          # Playwright E2E tests (requires dev server)
 npm run e2e:ui       # Playwright with interactive UI
 ```
 
+## Verify
+
+Run the frontend gate from the repository root:
+
+```bash
+npm run verify
+```
+
+Run the worker gate from the repository root:
+
+```bash
+cd worker && python3 -m pytest -q
+```
+
+Current local `verification_gap`:
+
+- The worker gate needs pytest + `worker/requirements.txt` installed into a venv; the system Python has neither. Frontend gate is green as of 2026-08-06 (`npm install` restored dependencies).
+
 ### Test Structure
 
 - **Unit tests (Vitest):** `src/**/__tests__/*.test.ts` — constants, dev-mock, mock-data, worker-client, PDF certificate builder, Stripe client/products/webhooks, API validation schemas

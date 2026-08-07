@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "verify": "npm run lint && npm run test && npm run build",
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
