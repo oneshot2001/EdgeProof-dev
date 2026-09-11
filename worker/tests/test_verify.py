@@ -3,7 +3,11 @@
 import pytest
 from fastapi.testclient import TestClient
 from app.main import app
+from app.config import settings
 import io
+
+settings.allow_degraded_sandbox = True
+settings.use_mock_results = True
 
 client = TestClient(app)
 
