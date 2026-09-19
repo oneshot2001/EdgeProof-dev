@@ -99,7 +99,7 @@ npm run e2e          # Playwright E2E tests (requires dev server)
 npm run e2e:ui       # Playwright with interactive UI
 ```
 
-## Verify
+## Verification
 
 Run the frontend gate from the repository root:
 
@@ -107,15 +107,15 @@ Run the frontend gate from the repository root:
 npm run verify
 ```
 
-Run the worker gate from the repository root:
+Run the local worker gate from the repository root:
 
 ```bash
-cd worker && python3 -m pytest -q
+make -C worker test
 ```
 
-Current local `verification_gap`:
+The `test` target depends on the `.venv` file target and runs `.venv/bin/pytest -m "not linux_sandbox"`. Tests marked `linux_sandbox` remain on the Linux Docker gate because they fail off Linux by design.
 
-- The worker gate needs pytest + `worker/requirements.txt` installed into a venv; the system Python has neither. Frontend gate is green as of 2026-08-06 (`npm install` restored dependencies).
+The `.venv` target runs `uv venv --python 3.12 --seed .venv && .venv/bin/pip install -r requirements.txt` only when `worker/.venv` is absent. An existing environment is reused without reinstalling dependencies, so the pre-built venv supports offline verification. To create a missing environment while online, run `make -C worker .venv`.
 
 ### Test Structure
 
