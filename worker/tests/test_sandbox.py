@@ -6,6 +6,7 @@ import subprocess
 import sys
 import textwrap
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -231,6 +232,32 @@ def test_ac13_host_upload_cap_rejects_before_pipeline(monkeypatch, restore_setti
         )
         assert response.status_code == 400
         assert client.get("/health").status_code == 200
+
+
+def test_host_run_sandboxed_rejects_oversized_upload_before_ffprobe(monkeypatch, tmp_path, restore_settings):
+    settings.sandbox_max_input_bytes = 1
+    input_file = tmp_path / "clip.mp4"
+    input_file.write_bytes(b"xx")
+    monkeypatch.setattr(
+        "app.sandbox.ensure_sandbox_probed",
+        AsyncMock(return_value=SANDBOX_MODE_DEGRADED),
+    )
+    spawn = AsyncMock(side_effect=AssertionError("ffprobe must not be spawned"))
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+
+    result = _run(
+        run_sandboxed(
+            ["ffprobe", str(input_file)],
+            ro_paths=[str(input_file)],
+            scratch_dir=str(tmp_path / "scratch"),
+            timeout=5,
+        )
+    )
+
+    assert result.launch_failed
+    assert result.returncode == 126
+    assert result.sandbox_error == "containment setup failed: ValueError"
+    spawn.assert_not_called()
 
 
 def test_ac12_host_no_parse_on_signal_death(monkeypatch, tmp_path, restore_settings):
