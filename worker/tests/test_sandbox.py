@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 import app.main as main
 from app.config import settings
 from app.models.verification import VerificationResult
-from app.sandbox import SANDBOX_MODE_DEGRADED, SandboxResult, get_sandbox_mode, run_sandboxed
+from app.sandbox import SANDBOX_MODE_DEGRADED, SandboxResult, _resolve_ro_paths, get_sandbox_mode, run_sandboxed
 from app.services import svf_runner, video_info
 
 
@@ -232,6 +232,34 @@ def test_ac13_host_upload_cap_rejects_before_pipeline(monkeypatch, restore_setti
         )
         assert response.status_code == 400
         assert client.get("/health").status_code == 200
+
+
+def test_host_resolve_ro_paths_rejects_directory(tmp_path):
+    with pytest.raises(ValueError, match="not a regular file"):
+        _resolve_ro_paths([str(tmp_path)])
+
+
+def test_host_resolve_ro_paths_rejects_missing_path(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        _resolve_ro_paths([str(tmp_path / "missing.mp4")])
+
+
+def test_host_resolve_ro_paths_rejects_oversized_file(monkeypatch, tmp_path, restore_settings):
+    monkeypatch.setattr(settings, "sandbox_max_input_bytes", 1)
+    input_file = tmp_path / "clip.mp4"
+    input_file.write_bytes(b"xx")
+
+    with pytest.raises(ValueError, match="exceeds sandbox max input bytes"):
+        _resolve_ro_paths([str(input_file)])
+
+
+def test_host_resolve_ro_paths_resolves_small_file(monkeypatch, tmp_path, restore_settings):
+    monkeypatch.setattr(settings, "sandbox_max_input_bytes", 10)
+    input_file = tmp_path / "clip.mp4"
+    input_file.write_bytes(b"video")
+    monkeypatch.chdir(tmp_path)
+
+    assert _resolve_ro_paths(["clip.mp4"]) == [input_file.resolve()]
 
 
 def test_host_run_sandboxed_rejects_oversized_upload_before_ffprobe(monkeypatch, tmp_path, restore_settings):
