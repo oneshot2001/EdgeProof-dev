@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 import app.main as main
 from app.config import settings
 from app.models.verification import VerificationResult
-from app.sandbox import SANDBOX_MODE_DEGRADED, SandboxResult, _resolve_ro_paths, get_sandbox_mode, run_sandboxed
+from app.sandbox import SANDBOX_MODE_DEGRADED, SandboxResult, _child_env, _resolve_ro_paths, get_sandbox_mode, run_sandboxed
 from app.services import svf_runner, video_info
 
 
@@ -232,6 +232,17 @@ def test_ac13_host_upload_cap_rejects_before_pipeline(monkeypatch, restore_setti
         )
         assert response.status_code == 400
         assert client.get("/health").status_code == 200
+
+
+def test_host_child_env_excludes_parent_secrets(monkeypatch, tmp_path):
+    monkeypatch.setenv("WORKER_API_KEY", "parent-worker-secret")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "parent-supabase-secret")
+    scratch_dir = str(tmp_path / "scratch")
+
+    env = _child_env(scratch_dir)
+
+    assert set(env) == {"PATH", "LANG", "TMPDIR"}
+    assert env["TMPDIR"] == scratch_dir
 
 
 def test_host_resolve_ro_paths_rejects_directory(tmp_path):
