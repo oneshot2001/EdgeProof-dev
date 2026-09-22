@@ -52,3 +52,28 @@ Items 4–5 use a synthetic in-test PKI; production `chain_pems` stays empty unt
 - **Empirical (b)**: real Q6358-LE clip run under `faketime '2036-01-01'` in Docker; needs a fixture clip. `linux_sandbox` item.
 - **Hard wall 2035-10-26**: stock SVF rejects every Axis chain after the root expires. Fix = fork with
   `X509_VERIFY_PARAM_set_time` at the signed camera timestamp, or evaluate at `verified_at` via the bundle (item 4).
+
+## Decision 2026-09-22 — chain exposure (via /codex-pair, Codex gpt-6-astra)
+
+**Option C, not A or B.** SVF at `1ae9fed` already has `meson_options.txt` `parsesei` → `PRINT_DECODED_SEI`,
+which prints the Axis vendor TLV: attestation bytes + `certificate chain:` PEMs
+(`lib/src/sv_axis_communications.c:656-668`) plus the public key. So a second validator binary built from
+**unchanged** upstream with `-Dparsesei=true` dumps everything the bundle needs; the stock build stays the
+verdict of record. No fork to maintain, no parser to defend, and the bundle records both binaries' hashes
+(source SHAs alone do not identify a binary — add build flags + executable/container hashes).
+
+What Codex corrected in Claude's framing:
+- **Two key roles.** The attestation leaf key ≠ the video-signing key (attested-key path binds a separate
+  signing key via the attestation blob; factory-provisioned mode takes it from the leaf). Leaf SPKI alone
+  cannot detect signing-key rotation. Bundle must carry both SPKIs + the attestation bytes with explicit roles.
+- **Chain failure short-circuits attestation** (`sv_axis_communications.c:800`), so a bundle-side chain walk
+  after expiry cannot re-establish the signing-key binding on its own; historical verification must also
+  re-verify the attestation. `verified_at` needs contemporaneous independent evidence (RFC 3161) — a
+  timestamp obtained after expiry cannot supply it retroactively.
+- **SEI layout** (v2.3.5): UUID, 1 flags byte, TLVs (general=1, pubkey=2, product=3, hashes=4, sig=5,
+  crypto=7, Axis vendor=129 = `version | attestation_len:u8 | attestation | concatenated PEMs`, root
+  omitted). Chain repeats every signing GOP by default; **golden-SEI mode sends it once** → a cropped clip
+  can lack it. Product serial vs X.509 serial vs subject `serialNumber` vs CN are distinct; `svf_runner.py:272`
+  currently invents `CN=<device serial>`.
+- Daubert/702 weighs testing and error characteristics, not upstream-SHA purity; a disclosed output-only
+  build variant is easier to defend than an independent parser with its own selection rules.
