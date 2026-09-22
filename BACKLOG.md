@@ -17,10 +17,10 @@ Out of scope until Matthew says otherwise: Increment 2 (Fly/queue/split), Tier 1
 
 ## Blocked / needs Matthew
 - [ ] DECISION (no accept line, do not loop): chain exposure for `bundle["device_key"]` in production — fork `apps/validator/main.c` to dump chain PEMs vs. Python SEI parser (UUID `5369676e-6564-2056-6964-656f2e2e2e30`). `/codex-pair` before lock-in. See `docs/durability-design.md`.
-- [ ] DECISION (no accept line): `VIDEO IS VALID, BUT HAS MISSING FRAMES!` → item 1 maps to `inconclusive`; confirm, or pick `authentic`+gap error / `tampered`.
 - [ ] FIXTURE (no accept line): empirical expiry test — real Q6358-LE signed clip run in the Docker image under `faketime '2036-01-01'`; expect `PUBLIC KEY IS NOT VALID!` + `VIDEO IS VALID!`. Needs a fixture clip from Matthew; `linux_sandbox` item.
 
 ## Done
+- [x] DECISION 2026-09-22: `VIDEO IS VALID, BUT HAS MISSING FRAMES!` maps to `inconclusive` (Matthew confirmed).
 - [x] `worker/app/sandbox.py` `_child_env`: add a host unit test that with `WORKER_API_KEY` and a `SUPABASE_SERVICE_ROLE_KEY` set in the parent environment (`monkeypatch.setenv`) the child env has exactly the keys `PATH`, `LANG`, `TMPDIR`, and `TMPDIR` equals the scratch dir passed in — accept: `make -C worker test` exits 0 with the new test (Mac selection, `-m "not linux_sandbox"`); follow the existing host-test style in `worker/tests/test_sandbox.py` (`monkeypatch`, `restore_settings`, the file's `asyncio.run` helper); no change to `worker/app/` unless the test exposes a bug.
 - [x] `worker/app/sandbox.py` `_resolve_ro_paths`: add host unit tests — a directory raises `ValueError` (not a regular file), a missing path raises `FileNotFoundError`, a file larger than a monkeypatched `settings.sandbox_max_input_bytes` raises `ValueError`, a small regular file resolves to its absolute path — accept: `make -C worker test` exits 0 with the new test (Mac selection, `-m "not linux_sandbox"`); follow the existing host-test style in `worker/tests/test_sandbox.py` (`monkeypatch`, `restore_settings`, the file's `asyncio.run` helper); no change to `worker/app/` unless the test exposes a bug.
 - [x] `worker/app/sandbox.py`: add a unit test that `run_sandboxed` rejects an upload over the configured size limit before spawning ffprobe — accept: `make -C worker test` exits 0 with the new test (Mac selection, `-m "not linux_sandbox"`).
