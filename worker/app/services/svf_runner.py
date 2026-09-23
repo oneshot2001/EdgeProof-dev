@@ -56,6 +56,7 @@ EMPTY_RESULT = {
     "frames_not_ok": 0,
     "has_signature": False,
     "signature_valid": False,
+    "public_key_validation": "not_feasible",
     "gop_chain_intact": False,
     "device_serial": "",
     "device_cert_subject": "",
@@ -184,6 +185,9 @@ def parse_svf_output(output: str, return_code: int) -> dict:
     deferred per Increment 1 amendment 21.
 
     Handles the validation_results.txt format produced by SVF v2.x:
+    - "VIDEO IS VALID!" / "VIDEO IS INVALID!" / missing frames
+    - "PUBLIC KEY IS VALID!" / "PUBLIC KEY IS NOT VALID!"
+    - "Number of valid/invalid GOPs: N"
     - "VIDEO IS NOT SIGNED!" / "VIDEO IS SIGNED AND VERIFIED"
     - "PUBLIC KEY VALIDATED" / "PUBLIC KEY COULD NOT BE VALIDATED!"
     - "Number of unsigned/OK/NOT OK Bitstream Units: N"
@@ -204,6 +208,7 @@ def parse_svf_output(output: str, return_code: int) -> dict:
         "frames_not_ok": 0,
         "has_signature": False,
         "signature_valid": False,
+        "public_key_validation": "not_feasible",
         "gop_chain_intact": False,
         "device_serial": "",
         "device_cert_subject": "",
@@ -237,11 +242,16 @@ def parse_svf_output(output: str, return_code: int) -> dict:
         result["status"] = "tampered"
 
     # Public key validation
-    if "public key validated" in lower_output and "could not" not in lower_output:
-        result["signature_valid"] = True
+    if "public key is not valid" in lower_output:
+        result["public_key_validation"] = "not_ok"
+        result["signature_valid"] = False
     elif "public key could not be validated" in lower_output:
-        # Key not validated but video may still be signed
-        pass
+        result["public_key_validation"] = "not_feasible"
+    elif "public key is valid" in lower_output or (
+        "public key validated" in lower_output and "could not" not in lower_output
+    ):
+        result["public_key_validation"] = "ok"
+        result["signature_valid"] = True
 
     # Parse Bitstream Unit counts (SVF v2.x format)
     ok_units = _extract_int(output, r"Number of OK Bitstream Units:\s*(\d+)")
@@ -263,6 +273,16 @@ def parse_svf_output(output: str, return_code: int) -> dict:
         result["gop_chain_intact"] = True
     elif not_ok_units > 0:
         result["gop_chain_intact"] = False
+
+    # Pinned validator GOP counts are separate from Bitstream Unit counts.
+    valid_gops = _extract_int(output, r"Number of valid GOPs:\s*(\d+)")
+    invalid_gops = _extract_int(output, r"Number of invalid GOPs:\s*(\d+)")
+    missing_gops = _extract_int(output, r"Number of valid GOPs with missing BUs:\s*(\d+)")
+    if valid_gops + invalid_gops + missing_gops > 0:
+        result["gops_ok"] = valid_gops
+        result["gops_not_ok"] = invalid_gops
+        result["gops_total"] = valid_gops + invalid_gops + missing_gops
+        result["gop_chain_intact"] = invalid_gops == 0 and missing_gops == 0
 
     # Parse Product Info section
     serial_match = re.search(r"Serial Number:\s*(\S+)", output)
@@ -313,6 +333,25 @@ def parse_svf_output(output: str, return_code: int) -> dict:
         elif "no signed video" in lower_output or "no signature" in lower_output:
             result["status"] = "unsigned"
             result["has_signature"] = False
+
+    # Pinned validator verdicts take precedence over legacy stdout patterns.
+    if "video is invalid!" in lower_output:
+        result["has_signature"] = True
+        result["signature_valid"] = False
+        result["status"] = "tampered"
+    elif "video is valid, but has missing frames!" in lower_output:
+        result["has_signature"] = True
+        result["signature_valid"] = False
+        result["status"] = "inconclusive"
+    elif "video is valid!" in lower_output:
+        result["has_signature"] = True
+        result["signature_valid"] = result["public_key_validation"] == "ok"
+        result["status"] = "authentic" if result["signature_valid"] else "inconclusive"
+
+    if result["public_key_validation"] == "not_ok":
+        result["signature_valid"] = False
+        if result["status"] == "authentic":
+            result["status"] = "inconclusive"
 
     # Legacy GOP/frame count patterns
     if result["gops_total"] == 0:
