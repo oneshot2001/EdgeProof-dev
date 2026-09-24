@@ -47,6 +47,7 @@ def map_to_result(svf_result: dict, video_info: dict) -> VerificationResult:
     cert_subject = svf_result.get("device_cert_subject", "")
     certificate_chain = CertificateChain(
         valid=svf_result.get("signature_valid", False),
+        public_key_validation=svf_result.get("public_key_validation", ""),
         device_cert_subject=cert_subject,
         intermediate_ca="",  # Populated by cert validator if available
         root_ca="",
@@ -87,10 +88,10 @@ def map_to_result(svf_result: dict, video_info: dict) -> VerificationResult:
         hash_algorithm=svf_result.get("hash_algorithm", "SHA-256"),
     )
 
-    # Temporal info from ffprobe
+    # Temporal info from ffprobe, falling back to SVF timestamps
     temporal = Temporal(
-        recording_start=video_info.get("recording_start", ""),
-        recording_end=video_info.get("recording_end", ""),
+        recording_start=video_info.get("recording_start") or svf_result.get("first_frame_ts", ""),
+        recording_end=video_info.get("recording_end") or svf_result.get("last_frame_ts", ""),
         duration_seconds=video_info.get("duration_seconds", 0.0),
         gaps_detected=0,
         gap_details=[],
@@ -109,6 +110,8 @@ def map_to_result(svf_result: dict, video_info: dict) -> VerificationResult:
     errors = []
     if svf_result.get("error"):
         errors.append(svf_result["error"])
+    if svf_result.get("public_key_validation") == "not_ok":
+        errors.append("Signing public key validation failed")
     if status == VerificationStatus.unsigned:
         errors.append(
             f"No signed video metadata (SEI NALU with UUID {SIGNING_UUID}) found in video stream"

@@ -22,6 +22,7 @@ class DeviceInfo(BaseModel):
 
 class CertificateChain(BaseModel):
     valid: bool = False
+    public_key_validation: str = ""
     device_cert_subject: str = ""
     intermediate_ca: str = ""
     root_ca: str = ""
