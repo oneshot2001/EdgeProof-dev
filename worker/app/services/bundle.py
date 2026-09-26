@@ -2,7 +2,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from cryptography import x509
-from cryptography.hazmat.primitives import hashes
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 
 from app.models.verification import VerificationResult
 
@@ -41,3 +43,60 @@ def build_bundle(
         "timestamp_proof": None,
         "trust_anchors": trust_anchors,
     }
+
+
+def verify_bundle_chain(bundle: dict, chain_pems: list[str], at: datetime) -> dict:
+    """Walk a leaf-first EC chain using only the bundle's embedded trust anchors."""
+    if at.tzinfo is None or at.utcoffset() is None:
+        raise ValueError("at must be timezone-aware")
+    at = at.astimezone(timezone.utc)
+    chain = [x509.load_pem_x509_certificate(pem.encode()) for pem in chain_pems]
+    if not chain:
+        raise ValueError("chain_pems must contain a leaf certificate")
+    anchors = [
+        x509.load_pem_x509_certificate(anchor["pem"].encode())
+        for anchor in bundle["trust_anchors"]
+    ]
+    anchor_fingerprints = {cert.fingerprint(hashes.SHA256()) for cert in anchors}
+    leaf = chain[0]
+    digest = hashes.Hash(hashes.SHA256())
+    digest.update(leaf.public_key().public_bytes(
+        serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo,
+    ))
+    result = {
+        "valid": False,
+        "reason": "no_trust_anchor",
+        "anchor_fingerprint": None,
+        "leaf_subject": leaf.subject.rfc4514_string(),
+        "leaf_spki_sha256": digest.finalize().hex(),
+        "leaf_not_after": leaf.not_valid_after_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "evaluated_at": at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    cert = leaf
+    visited = set()
+    while True:
+        fingerprint = cert.fingerprint(hashes.SHA256())
+        if fingerprint in visited:
+            return result
+        visited.add(fingerprint)
+        if not cert.not_valid_before_utc <= at <= cert.not_valid_after_utc:
+            result["reason"] = "expired"
+            return result
+        if fingerprint in anchor_fingerprints:
+            result.update(valid=True, reason="", anchor_fingerprint=fingerprint.hex())
+            return result
+        issuer = next(
+            (candidate for candidate in chain[1:] + anchors if candidate.subject == cert.issuer),
+            None,
+        )
+        if issuer is None:
+            return result
+        try:
+            issuer.public_key().verify(
+                cert.signature, cert.tbs_certificate_bytes,
+                ec.ECDSA(cert.signature_hash_algorithm),
+            )
+        except InvalidSignature:
+            result["reason"] = "bad_signature"
+            return result
+        cert = issuer
