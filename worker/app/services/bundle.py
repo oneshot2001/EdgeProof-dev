@@ -4,7 +4,6 @@ from pathlib import Path
 from cryptography import x509
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec
 
 from app.models.verification import VerificationResult
 
@@ -46,7 +45,7 @@ def build_bundle(
 
 
 def verify_bundle_chain(bundle: dict, chain_pems: list[str], at: datetime) -> dict:
-    """Walk a leaf-first EC chain using only the bundle's embedded trust anchors."""
+    """Walk a leaf-first chain using only the bundle's embedded trust anchors."""
     if at.tzinfo is None or at.utcoffset() is None:
         raise ValueError("at must be timezone-aware")
     at = at.astimezone(timezone.utc)
@@ -85,18 +84,26 @@ def verify_bundle_chain(bundle: dict, chain_pems: list[str], at: datetime) -> di
         if fingerprint in anchor_fingerprints:
             result.update(valid=True, reason="", anchor_fingerprint=fingerprint.hex())
             return result
-        issuer = next(
-            (candidate for candidate in chain[1:] + anchors if candidate.subject == cert.issuer),
-            None,
-        )
-        if issuer is None:
+        candidates = [
+            candidate for candidate in chain[1:] + anchors if candidate.subject == cert.issuer
+        ]
+        if not candidates:
             return result
-        try:
-            issuer.public_key().verify(
-                cert.signature, cert.tbs_certificate_bytes,
-                ec.ECDSA(cert.signature_hash_algorithm),
-            )
-        except InvalidSignature:
+        for issuer in candidates:
+            try:
+                cert.verify_directly_issued_by(issuer)
+            except (InvalidSignature, ValueError):
+                continue
+            break
+        else:
             result["reason"] = "bad_signature"
             return result
+        if issuer.fingerprint(hashes.SHA256()) not in anchor_fingerprints:
+            try:
+                is_ca = issuer.extensions.get_extension_for_class(x509.BasicConstraints).value.ca
+            except x509.ExtensionNotFound:
+                is_ca = False
+            if not is_ca:
+                result["reason"] = "not_ca"
+                return result
         cert = issuer
