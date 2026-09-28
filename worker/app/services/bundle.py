@@ -13,6 +13,7 @@ def build_bundle(
     file_sha256: str,
     svf_raw_output: str,
     certs_dir: str,
+    chain_pems: list[str] | None = None,
 ) -> dict:
     """Package a verification result with validator identity and local certificates."""
     trust_anchors = []
@@ -28,6 +29,22 @@ def build_bundle(
             "pem": pem,
         })
 
+    device_key = None
+    if chain_pems:
+        leaf = x509.load_pem_x509_certificate(chain_pems[0].encode())
+        digest = hashes.Hash(hashes.SHA256())
+        digest.update(leaf.public_key().public_bytes(
+            serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo,
+        ))
+        device_key = {
+            "attestation_leaf_spki_sha256": digest.finalize().hex(),
+            "signing_key_spki_sha256": None,
+            "leaf_serial": leaf.serial_number,
+            "not_before": leaf.not_valid_before_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "not_after": leaf.not_valid_after_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "subject": leaf.subject.rfc4514_string(),
+        }
+
     return {
         "format": "edgeproof-bundle/1",
         "file_sha256": file_sha256,
@@ -40,6 +57,7 @@ def build_bundle(
         },
         "revocation": {"checked": False, "source": None},
         "timestamp_proof": None,
+        "device_key": device_key,
         "trust_anchors": trust_anchors,
     }
 
