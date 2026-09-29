@@ -12,6 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main
+import app.sandbox as sandbox
 from app.config import settings
 from app.models.verification import VerificationResult
 from app.sandbox import SANDBOX_MODE_DEGRADED, SandboxResult, _child_env, _resolve_ro_paths, get_sandbox_mode, run_sandboxed
@@ -232,6 +233,48 @@ def test_ac13_host_upload_cap_rejects_before_pipeline(monkeypatch, restore_setti
         )
         assert response.status_code == 400
         assert client.get("/health").status_code == 200
+
+
+def test_host_launcher_argv_carries_limits_and_wrapped_argv(monkeypatch, restore_settings):
+    monkeypatch.setattr(sandbox, "_launcher_path", lambda: "/fake/rlimit-launcher")
+    settings.sandbox_rlimit_as_bytes = 123456789
+    settings.sandbox_rlimit_fsize_bytes = 9876543
+    settings.sandbox_rlimit_nproc = 7
+    wrapped_argv = ["/usr/bin/ffprobe", "-show_format", "/tmp/clip with spaces.mp4"]
+
+    argv = sandbox._launcher_argv(wrapped_argv, 23)
+
+    assert argv == [
+        "/fake/rlimit-launcher",
+        "--as-bytes", "123456789",
+        "--cpu-seconds", "23",
+        "--fsize-bytes", "9876543",
+        "--nofile", str(sandbox.NOFILE_LIMIT),
+        "--nproc", "7",
+        "--",
+        *wrapped_argv,
+    ]
+    assert argv.count("--") == 1
+
+
+def test_host_launcher_argv_without_launcher_returns_none(monkeypatch):
+    monkeypatch.setattr(sandbox, "_launcher_path", lambda: None)
+
+    assert sandbox._launcher_argv(["/usr/bin/ffprobe", "-show_format"], 23) is None
+
+
+@pytest.mark.parametrize("binary, expected", [
+    ("/usr/bin/ffprobe", 17),
+    ("ffprobe", 17),
+    ("/usr/local/bin/signed-video-validator", 43),
+    ("/usr/bin/other", 43),
+    ("/usr/bin/ffprobe-other", 43),
+])
+def test_host_cpu_limit_for_selects_binary_setting(binary, expected, restore_settings):
+    settings.sandbox_rlimit_cpu_seconds_ffprobe = 17
+    settings.sandbox_rlimit_cpu_seconds_validator = 43
+
+    assert sandbox._cpu_limit_for(binary) == expected
 
 
 def test_host_child_env_excludes_parent_secrets(monkeypatch, tmp_path):
