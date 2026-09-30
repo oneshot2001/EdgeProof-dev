@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec, ed25519, rsa
+from cryptography.hazmat.primitives.asymmetric import ec, ed25519, rsa, x25519
 from cryptography.x509.oid import NameOID
 
 from app.models.verification import mock_tampered_result
@@ -178,6 +178,26 @@ def test_host_verify_bundle_chain_mismatched_anchor_key_type():
     )
     assert result["valid"] is False
     assert result["reason"] == "bad_signature"
+
+
+@pytest.mark.parametrize("include_intermediate", [True, False])
+def test_host_verify_bundle_chain_x25519_candidate(
+    synthetic_bundle, synthetic_pki, include_intermediate,
+):
+    root, intermediate, leaf = synthetic_pki["trusted"]
+    root_key = synthetic_pki["trusted_keys"][0]
+    decoy = _issue_cert(
+        intermediate.subject, x25519.X25519PrivateKey.generate(),
+        root.subject, root_key, ca=True,
+    )
+    chain = [_pem(leaf), _pem(decoy)]
+    if include_intermediate:
+        chain.append(_pem(intermediate))
+    result = verify_bundle_chain(
+        synthetic_bundle, chain, at=datetime(2026, 9, 22, tzinfo=timezone.utc),
+    )
+    assert result["valid"] is include_intermediate
+    assert result["reason"] == ("" if include_intermediate else "bad_signature")
 
 
 def test_host_verify_bundle_chain_tries_matching_candidates(synthetic_bundle, synthetic_pki):

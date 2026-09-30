@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from cryptography import x509
-from cryptography.exceptions import InvalidSignature
+from cryptography.exceptions import InvalidSignature, UnsupportedAlgorithm
 from cryptography.hazmat.primitives import hashes, serialization
 
 from app.models.verification import VerificationResult
@@ -110,7 +110,7 @@ def verify_bundle_chain(bundle: dict, chain_pems: list[str], at: datetime) -> di
         for issuer in candidates:
             try:
                 cert.verify_directly_issued_by(issuer)
-            except (InvalidSignature, ValueError):
+            except (InvalidSignature, ValueError, TypeError, UnsupportedAlgorithm):
                 continue
             break
         else:
