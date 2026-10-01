@@ -2,6 +2,7 @@ import asyncio
 import os
 import platform
 import shutil
+import signal
 import subprocess
 import sys
 import textwrap
@@ -275,6 +276,27 @@ def test_host_cpu_limit_for_selects_binary_setting(binary, expected, restore_set
     settings.sandbox_rlimit_cpu_seconds_validator = 43
 
     assert sandbox._cpu_limit_for(binary) == expected
+
+
+@pytest.mark.parametrize("returncode, expected", [
+    (0, False),
+    (1, False),
+    *[(-number, True) for number in sorted(sandbox.RLIMIT_SIGNAL_NUMBERS)],
+    (-signal.SIGTERM, False),
+    (-999, False),
+])
+def test_host_is_rlimit_signal_classifies_returncode(returncode, expected):
+    assert sandbox._is_rlimit_signal(returncode) is expected
+
+
+@pytest.mark.parametrize("returncode, expected", [
+    (125, True),
+    (127, True),
+    (1, False),
+    (-9, False),
+])
+def test_host_looks_like_launcher_failure_classifies_returncode(returncode, expected):
+    assert sandbox._looks_like_launcher_failure(returncode) is expected
 
 
 def test_host_child_env_excludes_parent_secrets(monkeypatch, tmp_path):
