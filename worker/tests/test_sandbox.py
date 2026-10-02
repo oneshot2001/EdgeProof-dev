@@ -299,6 +299,39 @@ def test_host_looks_like_launcher_failure_classifies_returncode(returncode, expe
     assert sandbox._looks_like_launcher_failure(returncode) is expected
 
 
+@pytest.mark.parametrize("stderr_text", [
+    "bwrap: Operation not permitted",
+    "bwrap: clone failed",
+    "bwrap: No such file or directory",
+    "bwrap: unexpected failure",
+    "",
+])
+def test_host_classify_probe_failure_userns_hint_wins(monkeypatch, stderr_text):
+    hint = "unprivileged_userns_clone=0"
+    monkeypatch.setattr(sandbox, "_userns_hint", lambda: hint)
+
+    assert sandbox._classify_probe_failure(stderr_text) == hint
+
+
+@pytest.mark.parametrize("stderr_text, expected", [
+    ("bwrap: Operation not permitted", "userns-unavailable"),
+    ("bwrap: OPERATION NOT PERMITTED", "userns-unavailable"),
+    ("bwrap: oPeRaTiOn NoT pErMiTtEd", "userns-unavailable"),
+    ("bwrap: clone failed", "userns-unavailable"),
+    ("bwrap: CLONE failed", "userns-unavailable"),
+    ("bwrap: ClOnE failed", "userns-unavailable"),
+    ("bwrap: No such file or directory", "bwrap-loader-or-binary-not-found"),
+    ("bwrap: NO SUCH FILE or directory", "bwrap-loader-or-binary-not-found"),
+    ("bwrap: nO sUcH fIlE or directory", "bwrap-loader-or-binary-not-found"),
+    ("bwrap: unexpected failure", "bwrap-probe-failed"),
+    ("", "bwrap-probe-failed"),
+])
+def test_host_classify_probe_failure_without_hint(monkeypatch, stderr_text, expected):
+    monkeypatch.setattr(sandbox, "_userns_hint", lambda: None)
+
+    assert sandbox._classify_probe_failure(stderr_text) == expected
+
+
 def test_host_child_env_excludes_parent_secrets(monkeypatch, tmp_path):
     monkeypatch.setenv("WORKER_API_KEY", "parent-worker-secret")
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "parent-supabase-secret")
