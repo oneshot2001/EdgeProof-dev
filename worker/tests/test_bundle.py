@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from cryptography import x509
+from cryptography.exceptions import UnsupportedAlgorithm
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, ed25519, rsa, x25519
 from cryptography.x509.oid import NameOID
@@ -191,6 +192,33 @@ def test_host_verify_bundle_chain_x25519_candidate(
         root.subject, root_key, ca=True,
     )
     chain = [_pem(leaf), _pem(decoy)]
+    if include_intermediate:
+        chain.append(_pem(intermediate))
+    result = verify_bundle_chain(
+        synthetic_bundle, chain, at=datetime(2026, 9, 22, tzinfo=timezone.utc),
+    )
+    assert result["valid"] is include_intermediate
+    assert result["reason"] == ("" if include_intermediate else "bad_signature")
+
+
+@pytest.mark.parametrize("include_intermediate", [False, True])
+def test_host_verify_bundle_chain_unsupported_curve_candidate(
+    synthetic_bundle, synthetic_pki, include_intermediate,
+):
+    _, intermediate, leaf = synthetic_pki["trusted"]
+    der = intermediate.public_bytes(serialization.Encoding.DER)
+    curve_oid = bytes.fromhex("06082a8648ce3d030107")
+    assert der.count(curve_oid) == 1
+    bad_curve = x509.load_der_x509_certificate(
+        der.replace(curve_oid, bytes.fromhex("06082a8648ce3d030109")),
+    )
+    bad_curve_pem = _pem(bad_curve)
+    with pytest.raises(UnsupportedAlgorithm):
+        leaf.verify_directly_issued_by(
+            x509.load_pem_x509_certificate(bad_curve_pem.encode()),
+        )
+
+    chain = [_pem(leaf), bad_curve_pem]
     if include_intermediate:
         chain.append(_pem(intermediate))
     result = verify_bundle_chain(
