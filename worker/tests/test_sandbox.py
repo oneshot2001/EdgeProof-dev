@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import app.main as main
@@ -234,6 +235,50 @@ def test_ac13_host_upload_cap_rejects_before_pipeline(monkeypatch, restore_setti
         )
         assert response.status_code == 400
         assert client.get("/health").status_code == 200
+
+
+class _FakeUpload:
+    def __init__(self, data, fail_after=None):
+        self.data = data
+        self.offset = 0
+        self.fail_after = fail_after
+
+    async def read(self, n):
+        if self.fail_after is not None and self.offset >= self.fail_after:
+            raise OSError("upload read failed")
+        chunk = self.data[self.offset:self.offset + n]
+        self.offset += len(chunk)
+        return chunk
+
+
+@pytest.mark.parametrize("data", [b"abcd", b"abcde"])
+def test_host_stream_upload_enforces_size_limit(monkeypatch, tmp_path, restore_settings, data):
+    monkeypatch.setattr(main, "UPLOAD_CHUNK_BYTES", 2)
+    monkeypatch.setattr(settings, "max_file_size_bytes", 4)
+    temp_path = tmp_path / "upload.mp4"
+    upload = _FakeUpload(data)
+
+    if len(data) > settings.max_file_size_bytes:
+        with pytest.raises(HTTPException) as exc:
+            _run(main._stream_upload_to_disk(upload, str(temp_path), settings.max_file_size_bytes))
+        assert exc.value.status_code == 400
+        assert not temp_path.exists()
+    else:
+        _run(main._stream_upload_to_disk(upload, str(temp_path), settings.max_file_size_bytes))
+        assert temp_path.read_bytes() == data
+
+
+def test_host_stream_upload_removes_partial_file_on_read_error(monkeypatch, tmp_path, restore_settings):
+    monkeypatch.setattr(main, "UPLOAD_CHUNK_BYTES", 2)
+    monkeypatch.setattr(settings, "max_file_size_bytes", 4)
+    temp_path = tmp_path / "upload.mp4"
+    upload = _FakeUpload(b"abcd", fail_after=2)
+
+    with pytest.raises(OSError, match="upload read failed"):
+        _run(main._stream_upload_to_disk(upload, str(temp_path), settings.max_file_size_bytes))
+
+    assert upload.offset == 2
+    assert not temp_path.exists()
 
 
 def test_host_launcher_argv_carries_limits_and_wrapped_argv(monkeypatch, restore_settings):
