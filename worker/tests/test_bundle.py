@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 from cryptography import x509
-from cryptography.exceptions import UnsupportedAlgorithm
+from cryptography.exceptions import InvalidSignature, UnsupportedAlgorithm
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, ed25519, rsa, x25519
 from cryptography.x509.oid import NameOID
@@ -238,6 +238,96 @@ def test_host_verify_bundle_chain_tries_matching_candidates(synthetic_bundle, sy
     )
     assert result["valid"] is True
     assert result["anchor_fingerprint"] == root.fingerprint(hashes.SHA256()).hex()
+
+
+@pytest.fixture
+def invalid_intermediates(synthetic_pki):
+    root, intermediate, leaf = synthetic_pki["trusted"]
+    root_key = synthetic_pki["trusted_keys"][0]
+    copies = {}
+    for reason in ("expired", "not_ca"):
+        copies[reason] = (
+            x509.CertificateBuilder()
+            .subject_name(intermediate.subject)
+            .issuer_name(intermediate.issuer)
+            .public_key(intermediate.public_key())
+            .serial_number(intermediate.serial_number)
+            .not_valid_before(intermediate.not_valid_before_utc)
+            .not_valid_after(
+                datetime(2025, 1, 1, tzinfo=timezone.utc)
+                if reason == "expired" else intermediate.not_valid_after_utc
+            )
+            .add_extension(
+                x509.BasicConstraints(ca=reason != "not_ca", path_length=None), critical=True,
+            )
+            .sign(root_key, hashes.SHA256())
+        )
+    der = intermediate.public_bytes(serialization.Encoding.DER)
+    point = intermediate.public_key().public_bytes(
+        serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint,
+    )
+    assert der.count(point) == 1
+    hybrid_point = bytes([0x06 | (point[-1] & 1)]) + point[1:]
+    copies["bad_signature"] = x509.load_der_x509_certificate(der.replace(point, hybrid_point))
+    with pytest.raises(InvalidSignature):
+        copies["bad_signature"].verify_directly_issued_by(root)
+    for copy in copies.values():
+        leaf.verify_directly_issued_by(copy)
+    return copies
+
+
+@pytest.mark.parametrize("include_intermediate", [False, True])
+def test_host_verify_bundle_chain_candidate_cycle(
+    synthetic_bundle, synthetic_pki, include_intermediate,
+):
+    _, intermediate, leaf = synthetic_pki["trusted"]
+    key = synthetic_pki["trusted_keys"][1]
+    cyclic = _issue_cert(intermediate.subject, key, intermediate.subject, key, ca=True)
+    chain = [_pem(leaf), _pem(cyclic)]
+    if include_intermediate:
+        chain.append(_pem(intermediate))
+    result = verify_bundle_chain(
+        synthetic_bundle, chain, at=datetime(2026, 9, 22, tzinfo=timezone.utc),
+    )
+    assert result["valid"] is include_intermediate
+    assert result["reason"] == ("" if include_intermediate else "no_trust_anchor")
+
+
+@pytest.mark.parametrize("reason", ["expired", "not_ca", "bad_signature"])
+@pytest.mark.parametrize("include_intermediate", [False, True])
+def test_host_verify_bundle_chain_retries_verifying_candidates(
+    synthetic_bundle, synthetic_pki, invalid_intermediates, reason, include_intermediate,
+):
+    root, intermediate, leaf = synthetic_pki["trusted"]
+    chain = [_pem(leaf), _pem(invalid_intermediates[reason])]
+    if include_intermediate:
+        chain.append(_pem(intermediate))
+    result = verify_bundle_chain(
+        synthetic_bundle, chain, at=datetime(2026, 9, 22, tzinfo=timezone.utc),
+    )
+    assert result["valid"] is include_intermediate
+    assert result["reason"] == ("" if include_intermediate else reason)
+    assert result["anchor_fingerprint"] == (
+        root.fingerprint(hashes.SHA256()).hex() if include_intermediate else None
+    )
+
+
+@pytest.mark.parametrize("reasons", [
+    ("expired", "not_ca", "bad_signature"),
+    ("bad_signature", "expired", "not_ca"),
+    ("not_ca", "bad_signature", "expired"),
+])
+def test_host_verify_bundle_chain_last_failure(
+    synthetic_bundle, synthetic_pki, invalid_intermediates, reasons,
+):
+    leaf = synthetic_pki["trusted"][2]
+    result = verify_bundle_chain(
+        synthetic_bundle, [_pem(leaf)] + [_pem(invalid_intermediates[r]) for r in reasons],
+        at=datetime(2026, 9, 22, tzinfo=timezone.utc),
+    )
+    assert result["valid"] is False
+    assert result["reason"] == reasons[-1]
+    assert result["anchor_fingerprint"] is None
 
 
 @pytest.mark.parametrize("cert_index", [0, 1, 2])

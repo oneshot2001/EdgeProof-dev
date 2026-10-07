@@ -89,39 +89,41 @@ def verify_bundle_chain(bundle: dict, chain_pems: list[str], at: datetime) -> di
         "leaf_not_after": leaf.not_valid_after_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "evaluated_at": at.strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
-    cert = leaf
-    visited = set()
-    while True:
+    def walk(cert, visited):
         fingerprint = cert.fingerprint(hashes.SHA256())
         if fingerprint in visited:
-            return result
-        visited.add(fingerprint)
+            return "no_trust_anchor", None
+        visited = visited | {fingerprint}
         if not cert.not_valid_before_utc <= at <= cert.not_valid_after_utc:
-            result["reason"] = "expired"
-            return result
+            return "expired", None
         if fingerprint in anchor_fingerprints:
-            result.update(valid=True, reason="", anchor_fingerprint=fingerprint.hex())
-            return result
+            return "", fingerprint.hex()
         candidates = [
             candidate for candidate in chain[1:] + anchors if candidate.subject == cert.issuer
         ]
         if not candidates:
-            return result
+            return "no_trust_anchor", None
+        reason = "bad_signature"
         for issuer in candidates:
             try:
                 cert.verify_directly_issued_by(issuer)
             except (InvalidSignature, ValueError, TypeError, UnsupportedAlgorithm):
                 continue
-            break
-        else:
-            result["reason"] = "bad_signature"
-            return result
-        if issuer.fingerprint(hashes.SHA256()) not in anchor_fingerprints:
-            try:
-                is_ca = issuer.extensions.get_extension_for_class(x509.BasicConstraints).value.ca
-            except x509.ExtensionNotFound:
-                is_ca = False
-            if not is_ca:
-                result["reason"] = "not_ca"
-                return result
-        cert = issuer
+            if issuer.fingerprint(hashes.SHA256()) not in anchor_fingerprints:
+                try:
+                    is_ca = issuer.extensions.get_extension_for_class(x509.BasicConstraints).value.ca
+                except x509.ExtensionNotFound:
+                    is_ca = False
+                if not is_ca:
+                    reason = "not_ca"
+                    continue
+            reason, anchor_fingerprint = walk(issuer, visited)
+            if anchor_fingerprint is not None:
+                return reason, anchor_fingerprint
+        return reason, None
+
+    reason, anchor_fingerprint = walk(leaf, set())
+    result.update(
+        valid=anchor_fingerprint is not None, reason=reason, anchor_fingerprint=anchor_fingerprint,
+    )
+    return result
