@@ -237,6 +237,34 @@ def test_ac13_host_upload_cap_rejects_before_pipeline(monkeypatch, restore_setti
         assert client.get("/health").status_code == 200
 
 
+@pytest.mark.parametrize("max_file_size_bytes, sandbox_max_input_bytes", [
+    (10_000, 4),
+    (4, 10_000),
+])
+def test_ac13_host_upload_cap_uses_lower_limit(
+    monkeypatch, tmp_path, restore_settings, max_file_size_bytes, sandbox_max_input_bytes
+):
+    async def degraded_probe():
+        return SANDBOX_MODE_DEGRADED
+
+    monkeypatch.setattr(main, "ensure_sandbox_probed", degraded_probe)
+    settings.use_mock_results = True
+    settings.allow_degraded_sandbox = True
+    settings.max_file_size_bytes = max_file_size_bytes
+    settings.sandbox_max_input_bytes = sandbox_max_input_bytes
+    settings.temp_dir = str(tmp_path)
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/verify",
+            files={"file": ("clip.mp4", b"abcde", "video/mp4")},
+            headers=AUTH_HEADER,
+        )
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Uploaded file is too large"}
+
+
 class _FakeUpload:
     def __init__(self, data, fail_after=None):
         self.data = data
@@ -278,6 +306,22 @@ def test_host_stream_upload_removes_partial_file_on_read_error(monkeypatch, tmp_
         _run(main._stream_upload_to_disk(upload, str(temp_path), settings.max_file_size_bytes))
 
     assert upload.offset == 2
+    assert not temp_path.exists()
+
+
+def test_host_stream_upload_removes_partial_file_on_write_error(tmp_path):
+    class InvalidChunkUpload:
+        def __init__(self):
+            self.chunks = iter([b"ab", "cd", b""])
+
+        async def read(self, n):
+            return next(self.chunks)
+
+    temp_path = tmp_path / "upload.mp4"
+
+    with pytest.raises(TypeError):
+        _run(main._stream_upload_to_disk(InvalidChunkUpload(), str(temp_path), 4))
+
     assert not temp_path.exists()
 
 
