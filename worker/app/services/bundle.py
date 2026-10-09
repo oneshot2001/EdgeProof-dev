@@ -93,7 +93,7 @@ def verify_bundle_chain(bundle: dict, chain_pems: list[str], at: datetime) -> di
         fingerprint = cert.fingerprint(hashes.SHA256())
         if fingerprint in visited:
             return "no_trust_anchor", None
-        visited = visited | {fingerprint}
+        visited.add(fingerprint)
         if not cert.not_valid_before_utc <= at <= cert.not_valid_after_utc:
             return "expired", None
         if fingerprint in anchor_fingerprints:

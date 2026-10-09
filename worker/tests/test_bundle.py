@@ -293,6 +293,45 @@ def test_host_verify_bundle_chain_candidate_cycle(
     assert result["reason"] == ("" if include_intermediate else "no_trust_anchor")
 
 
+def test_host_verify_bundle_chain_bounds_cyclic_candidate_search(synthetic_bundle, monkeypatch):
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "loop-ca")])
+    key = ec.generate_private_key(ec.SECP256R1())
+    copies = [
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(serial)
+        .not_valid_before(datetime(2020, 1, 1, tzinfo=timezone.utc))
+        .not_valid_after(datetime(2030, 1, 1, tzinfo=timezone.utc))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .sign(key, hashes.SHA256())
+        for serial in range(1, 31)
+    ]
+    leaf = _issue_cert(
+        x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "loop-leaf")]),
+        ec.generate_private_key(ec.SECP256R1()), name, key, ca=False,
+    )
+    verify = type(leaf).verify_directly_issued_by
+    calls = 0
+
+    def counted_verify(cert, issuer):
+        nonlocal calls
+        calls += 1
+        # Fail immediately so a regression cannot run the factorial search to completion.
+        assert calls <= 31 * 31
+        return verify(cert, issuer)
+
+    monkeypatch.setattr(type(leaf), "verify_directly_issued_by", counted_verify)
+    result = verify_bundle_chain(
+        synthetic_bundle, [_pem(leaf)] + [_pem(cert) for cert in copies],
+        at=datetime(2026, 9, 22, tzinfo=timezone.utc),
+    )
+    assert result["valid"] is False
+    assert result["reason"] == "no_trust_anchor"
+    assert calls <= 31 * 31
+
+
 @pytest.mark.parametrize("reason", ["expired", "not_ca", "bad_signature"])
 @pytest.mark.parametrize("include_intermediate", [False, True])
 def test_host_verify_bundle_chain_retries_verifying_candidates(
